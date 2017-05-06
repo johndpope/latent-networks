@@ -96,11 +96,12 @@ def load_params(path, params):
 
 
 # layers: 'name': ('parameter initializer', 'feedforward')
-layers = {'ff': ('param_init_fflayer', 'fflayer'),
-          'gru': ('param_init_gru', 'gru_layer'),
-          'lstm': ('param_init_lstm', 'lstm_layer'),
-          'latent_lstm': ('param_init_lstm', 'latent_lstm_layer'),
-          }
+layers = {
+    'ff': ('param_init_fflayer', 'fflayer'),
+    'gru': ('param_init_gru', 'gru_layer'),
+    'lstm': ('param_init_lstm', 'lstm_layer'),
+    'latent_lstm': ('param_init_lstm', 'latent_lstm_layer'),
+}
 
 
 def get_layer(name):
@@ -125,6 +126,10 @@ def norm_weight(nin, nout=None, scale=0.01, ortho=True):
     else:
         W = scale * numpy.random.randn(nin, nout)
     return W.astype('float32')
+
+
+def lrelu(x):
+    return tensor.clip(tensor.nnet.relu(x, 1. / 3), -3.0, 3.0)
 
 
 def tanh(x):
@@ -230,12 +235,15 @@ class TimitData():
                 assert np.sum(self.u_test[row, 1:l] -
                               self.x_test[row, :l-1]) == 0.0, row
 
-    def _iter_data(self, u, x):
+    def _iter_data(self, u, x, mask=None):
         # IMPORTANT: In SRNN (where the data come from) u refers to the input whereas x, to the target.
         indices = range(len(u))
         for idx in chunk(indices, n=self.batch_size):
             u_batch, x_batch = u[idx], x[idx]
-            mask = np.ones((x_batch.shape[0], x_batch.shape[1]), dtype='float32')
+            if mask is None:
+                mask = np.ones((x_batch.shape[0], x_batch.shape[1]), dtype='float32')
+            else:
+                mask = mask[idx]
             yield u_batch, x_batch, mask
 
     def get_train_batch(self):
@@ -244,8 +252,8 @@ class TimitData():
     def get_valid_batch(self):
         return iter(self._iter_data(self.u_valid, self.x_valid))
 
-    def get_testdata(self):
-        return self.u_test, self.x_test, self.mask_test
+    def get_test_batch(self):
+        return iter(self._iter_data(self.u_test, self.x_test, mask=self.mask_test))
 
 
 # feedforward layer: affine transformation + point-wise nonlinearity
@@ -525,20 +533,25 @@ def init_params(options):
     params = OrderedDict()
     params = get_layer('latent_lstm')[0](options, params,
                                          prefix='encoder',
-                                         nin=options['dim_input'],
+                                         nin=options['dim_proj'],
                                          dim=options['dim'])
+    params = get_layer('ff')[0](options, params, prefix='ff_in_lstm',
+                                nin=options['dim_input'], nout=options['dim_proj'],
+                                ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_lstm',
                                 nin=options['dim'], nout=options['dim'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
-                                nin=options['dim_input'],
+                                nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mu',
                                 nin=options['dim'],
-                                nout=options['dim_input'])
+                                nout=options['dim_input'],
+                                ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_sigma',
                                 nin=options['dim'],
-                                nout=options['dim_input'])
+                                nout=options['dim_input'],
+                                ortho=False)
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -547,21 +560,26 @@ def init_params(options):
 
     params = get_layer(options['encoder'])[0](options, params,
                                               prefix='encoder_r',
-                                              nin=options['dim_input'],
+                                              nin=options['dim_proj'],
                                               dim=options['dim'])
     # readout
+    params = get_layer('ff')[0](options, params, prefix='ff_in_lstm_r',
+                                nin=options['dim_input'], nout=options['dim_proj'],
+                                ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_lstm_r',
                                 nin=options['dim'], nout=options['dim'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev_r',
-                                nin=options['dim_input'],
+                                nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mu_r',
                                 nin=options['dim'],
-                                nout=options['dim_input'])
+                                nout=options['dim_input'],
+                                ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_sigma_r',
                                 nin=options['dim'],
-                                nout=options['dim_input'])
+                                nout=options['dim_input'],
+                                ortho=False)
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='z_mu', nin=options['prior_hidden'], nout=options['dim_z'], ortho=False)
@@ -584,9 +602,10 @@ def build_rev_model(tparams, options, x, y, x_mask):
     yr = y[::-1]
     xr_mask = x_mask[::-1]
 
-    (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr, options, prefix='encoder_r', mask=xr_mask)
+    xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
+    (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
-    out_prev = get_layer('ff')[1](tparams, xr, options, prefix='ff_out_prev_r', activ='linear')
+    out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
     out = tensor.tanh(out_lstm + out_prev)
     out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mu_r', activ='linear')
     out_logvar = get_layer('ff')[1](tparams, out, options, prefix='ff_out_sigma_r', activ='linear')
@@ -595,7 +614,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
     log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     nll_rev = -log_p_y                    # NLL
-    nll_rev = (nll_rev * xr_mask).sum(0)  # Average over seq_len.
+    nll_rev = (nll_rev * xr_mask).sum(0)
     return nll_rev, states_rev[::-1], updates_rev
 
 
@@ -603,15 +622,16 @@ def build_rev_model(tparams, options, x, y, x_mask):
 def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     opt_ret = dict()
     # disconnecting reconstruction gradient from going in the backward encoder
+    x_emb = get_layer('ff')[1](tparams, x, options, prefix='ff_in_lstm', activ='lrelu')
     rvals, updates_gen = get_layer('latent_lstm')[1](
-        tparams, state_below=x, options=options,
+        tparams, state_below=x_emb, options=options,
         prefix='encoder', mask=x_mask, gaussian_s=zmuv,
         back_states=states_rev)
 
     states_gen, z, kld, rec_cost_rev = rvals[0], rvals[2], rvals[3], rvals[4]
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
-    out_prev = get_layer('ff')[1](tparams, x, options, prefix='ff_out_prev', activ='linear')
+    out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
     out = tensor.tanh(out_lstm + out_prev)
     out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mu', activ='linear')
     out_logvar = get_layer('ff')[1](tparams, out, options, prefix='ff_out_sigma', activ='linear')
@@ -632,11 +652,13 @@ def ELBOcost(rec_cost, kld, kld_weight=1.):
     return rec_cost + kld_weight * kld
 
 
-def pred_probs(f_log_probs, options, data):
+def pred_probs(f_log_probs, options, data, source='valid'):
     rvals = []
     n_done = 0
 
-    for x, y, x_mask in data.get_valid_batch():
+    next_batch = (lambda: data.get_valid_batch()) \
+        if source == 'valid' else (lambda: data.get_test_batch())
+    for x, y, x_mask in next_batch():
         x = x.transpose(1, 0, 2)
         y = y.transpose(1, 0, 2)
         x_mask = x_mask.transpose(1, 0)
@@ -672,7 +694,8 @@ def adam(lr, tparams, gshared, beta1=0.9, beta2=0.999, e=1e-8):
 
 
 def train(dim_input=200,  # input vector dimensionality
-          dim=2500,  # the number of GRU units
+          dim=2000,  # the number of GRU units
+          dim_proj=600,  # the number of GRU units
           encoder='lstm',
           patience=10,  # early stopping patience
           max_epochs=5000,
@@ -681,7 +704,7 @@ def train(dim_input=200,  # input vector dimensionality
           decay_c=0.,  # L2 weight decay penalty
           lrate=0.001,
           maxlen=100,  # maximum length of the description
-          optimizer='rmsprop',
+          optimizer='adam',
           batch_size=16,
           valid_batch_size=16,
           saveto='model.npz',
@@ -824,17 +847,22 @@ def train(dim_input=200,  # input vector dimensionality
         print('Done')
 
         print 'Starting validation...'
-        valid_err = pred_probs(f_log_probs, model_options, data)
+        valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
+        test_err = pred_probs(f_log_probs, model_options, data, source='test')
         history_errs.append(valid_err)
+
         print 'Validation ELBO: ', valid_err
+        print 'Test ELBO: ', test_err
 
         # finish after this many updates
         if uidx >= finish_after:
             print('Finishing after %d iterations!' % uidx)
             break
 
-    valid_err = pred_probs(f_log_probs, model_options, data)
+    valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
+    test_err = pred_probs(f_log_probs, model_options, data, source='test')
     print 'Validation ELBO: ', valid_err
+    print 'Test ELBO: ', test_err
 
     params = copy.copy(best_p)
     numpy.savez(saveto, zipped_params=best_p,
