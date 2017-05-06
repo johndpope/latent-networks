@@ -241,10 +241,10 @@ class TimitData():
         for idx in chunk(indices, n=self.batch_size):
             u_batch, x_batch = u[idx], x[idx]
             if mask is None:
-                mask = np.ones((x_batch.shape[0], x_batch.shape[1]), dtype='float32')
+                mask_batch = np.ones((x_batch.shape[0], x_batch.shape[1]), dtype='float32')
             else:
-                mask = mask[idx]
-            yield u_batch, x_batch, mask
+                mask_batch = mask[idx]
+            yield u_batch, x_batch, mask_batch
 
     def get_train_batch(self):
         return iter(self._iter_data(self.u_train, self.x_train))
@@ -664,7 +664,8 @@ def pred_probs(f_log_probs, options, data, source='valid'):
         x_mask = x_mask.transpose(1, 0)
         n_done += x.shape[1]
 
-        zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], options['dim_z'])).astype('float32')
+        zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(
+            x.shape[0], x.shape[1], options['dim_z'])).astype('float32')
         elbo = f_log_probs(x, y, x_mask, zmuv)
         for val in elbo:
             rvals.append(val)
@@ -720,7 +721,7 @@ def train(dim_input=200,  # input vector dimensionality
           kl_rate=0.0003):
 
     prior_hidden = 1200
-    dim_z = 128
+    dim_z = 256
     encoder_hidden = 1200
     learn_h0 = False
     saveto = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate.npz'
@@ -735,7 +736,7 @@ def train(dim_input=200,  # input vector dimensionality
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
     x_mask = tensor.matrix('x_mask')
-    zmuv = tensor.matrix('zmuv')
+    zmuv = tensor.tensor3('zmuv')
     weight_f = tensor.scalar('weight_f')
     lr = tensor.scalar('lr')
 
@@ -812,7 +813,7 @@ def train(dim_input=200,  # input vector dimensionality
 
             ud_start = time.time()
             # compute cost, grads and copy grads to shared variables
-            zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], model_options['dim_z'])).astype('float32')
+            zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], x.shape[1], model_options['dim_z'])).astype('float32')
             vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np = \
                 f_prop(x, y, x_mask, zmuv, np.float32(kl_start))
             f_update(numpy.float32(lrate))
