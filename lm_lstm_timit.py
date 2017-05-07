@@ -22,7 +22,20 @@ from collections import OrderedDict
 #from char_data_iterator import TextIterator
 
 profile = False
-weight_aux = 0.0005
+
+
+def gradient_clipping(grads, tparams, clip_c=1.0):
+    g2 = 0.
+    for g in grads:
+        g2 += (g**2).sum()
+    g2 = tensor.sqrt(g2)
+    not_finite = tensor.or_(tensor.isnan(g2), tensor.isinf(g2))
+    new_grads = []
+    lr = tensor.scalar(name='lr')
+    for p, g in zip(tparams.values(), grads):
+        new_grads.append(tensor.switch(
+            g2 > clip_c, g * (clip_c / g2), g))
+    return new_grads, not_finite, tensor.lt(clip_c, g2)
 
 
 # push parameters to Theano shared variables
@@ -432,20 +445,14 @@ def latent_lstm_layer(
     non_seqs = [U, b, W, tparams[_p('z_cond', 'W')],
                 tparams[_p('trans_1', 'W')],
                 tparams[_p('trans_1', 'b')],
-                tparams[_p('z_mu', 'W')],
-                tparams[_p('z_mu', 'b')],
-                tparams[_p('z_sigma', 'W')],
-                tparams[_p('z_sigma', 'b')],
+                tparams[_p('z_mus', 'W')],
+                tparams[_p('z_mus', 'b')],
                 tparams[_p('inf', 'W')],
                 tparams[_p('inf', 'b')],
-                tparams[_p('inf_mu', 'W')],
-                tparams[_p('inf_mu', 'b')],
-                tparams[_p('inf_sigma', 'W')],
-                tparams[_p('inf_sigma', 'b')],
-                tparams[_p('gen_mu', 'W')],
-                tparams[_p('gen_mu', 'b')],
-                tparams[_p('gen_sigma', 'W')],
-                tparams[_p('gen_sigma', 'b')]]
+                tparams[_p('inf_mus', 'W')],
+                tparams[_p('inf_mus', 'b')],
+                tparams[_p('gen_mus', 'W')],
+                tparams[_p('gen_mus', 'b')]]
 
     # initial/previous memory
     if init_memory is None:
@@ -458,29 +465,26 @@ def latent_lstm_layer(
 
     def _step(mask, sbelow, d_, g_s, sbefore, cell_before,
               U, b, W, W_cond, trans_1_w, trans_1_b,
-              z_mu_w, z_mu_b,
-              z_sigma_w, z_sigma_b,
+              z_mus_w, z_mus_b,
               inf_w, inf_b,
-              inf_mu_w, inf_mu_b,
-              inf_s_w, inf_s_b,
-              gen_mu_w, gen_mu_b,
-              gen_s_w, gen_s_b):
+              inf_mus_w, inf_mus_b,
+              gen_mus_w, gen_mus_b):
 
         p_z = tensor.nnet.softplus(tensor.dot(sbefore, trans_1_w) + trans_1_b)
-        z_mu = tensor.dot(p_z, z_mu_w) + z_mu_b
-        z_sigma = tensor.dot(p_z, z_sigma_w) + z_sigma_b
+        z_mus = tensor.dot(p_z, z_mus_w) + z_mus_b
+        z_dim = z_mus.shape[-1] / 2
+        z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
 
         if d_ is not None:
             encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
-            encoder_mu = tensor.dot(encoder_hidden, inf_mu_w) + inf_mu_b
-            encoder_sigma = tensor.dot(encoder_hidden, inf_s_w) + inf_s_b
+            encoder_mus = tensor.dot(encoder_hidden, inf_mus_w) + inf_mus_b
+            encoder_mu, encoder_sigma = encoder_mus[:, :z_dim], encoder_mus[:, z_dim:]
             tild_z_t = encoder_mu +  g_s * tensor.exp(0.5 * encoder_sigma)
             kld = gaussian_kld(encoder_mu, encoder_sigma, z_mu, z_sigma)
             kld = tensor.sum(kld, axis=-1)
-            decoder_mu = tensor.dot(tild_z_t, gen_mu_w) + gen_mu_b
-            decoder_sigma = tensor.dot(tild_z_t, gen_s_w) + gen_s_b
+            decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
+            decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
-            # disconnect gradient here
             disc_d_ = theano.gradient.disconnected_grad(d_)
             recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
             recon_cost = tensor.sum(recon_cost, axis=-1)
@@ -544,13 +548,9 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mu',
+    params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
-                                nout=options['dim_input'],
-                                ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_sigma',
-                                nin=options['dim'],
-                                nout=options['dim_input'],
+                                nout=2 * options['dim_input'],
                                 ortho=False)
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -572,27 +572,18 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev_r',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mu_r',
+    params = get_layer('ff')[0](options, params, prefix='ff_out_mus_r',
                                 nin=options['dim'],
-                                nout=options['dim_input'],
-                                ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_sigma_r',
-                                nin=options['dim'],
-                                nout=options['dim_input'],
+                                nout=2 * options['dim_input'],
                                 ortho=False)
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='z_mu', nin=options['prior_hidden'], nout=options['dim_z'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='z_sigma', nin=options['prior_hidden'], nout=options['dim_z'], ortho=False)
-
+    params = get_layer('ff')[0](options, params, prefix='z_mus', nin=options['prior_hidden'], nout=2 * options['dim_z'], ortho=False)
     #Inference network params
     params = get_layer('ff')[0](options, params, prefix='inf', nin = 2 * options['dim'], nout=options['encoder_hidden'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='inf_mu', nin = options['encoder_hidden'], nout=options['dim_z'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='inf_sigma', nin = options['encoder_hidden'], nout=options['dim_z'], ortho=False)
-
+    params = get_layer('ff')[0](options, params, prefix='inf_mus', nin = options['encoder_hidden'], nout=2 * options['dim_z'], ortho=False)
     #Generative Network params
-    params = get_layer('ff')[0](options, params, prefix='gen_mu', nin = options['dim_z'], nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='gen_sigma', nin = options['dim_z'], nout=options['dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='gen_mus', nin = options['dim_z'], nout=2 * options['dim'], ortho=False)
     return params
 
 
@@ -606,9 +597,9 @@ def build_rev_model(tparams, options, x, y, x_mask):
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
     out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
-    out = tensor.tanh(out_lstm + out_prev)
-    out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mu_r', activ='linear')
-    out_logvar = get_layer('ff')[1](tparams, out, options, prefix='ff_out_sigma_r', activ='linear')
+    out = lrelu(out_lstm + out_prev)
+    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
+    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
 
     # ...
     log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
@@ -632,9 +623,9 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out = tensor.tanh(out_lstm + out_prev)
-    out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mu', activ='linear')
-    out_logvar = get_layer('ff')[1](tparams, out, options, prefix='ff_out_sigma', activ='linear')
+    out = lrelu(out_lstm + out_prev)
+    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
+    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
 
     # Compute gaussian log prob of target
     log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
@@ -674,7 +665,7 @@ def pred_probs(f_log_probs, options, data, source='valid'):
 
 # optimizers
 # name(hyperp, tparams, grads, inputs (list), cost) = f_grad_shared, f_update
-def adam(lr, tparams, gshared, beta1=0.9, beta2=0.999, e=1e-8):
+def adam(lr, tparams, gshared, beta1=0.9, beta2=0.99, e=1e-5):
     updates = []
     t_prev = theano.shared(numpy.float32(0.))
     t = t_prev + 1.
@@ -718,13 +709,17 @@ def train(dim_input=200,  # input vector dimensionality
           use_dropout=False,
           reload_=False,
           kl_start=0.2,
+          weight_aux=0.0005,
           kl_rate=0.0003):
 
-    prior_hidden = 1200
+    prior_hidden = dim
     dim_z = 256
-    encoder_hidden = 1200
+    encoder_hidden = dim
     learn_h0 = False
-    saveto = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate.npz'
+    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate'
+    saveto = desc + '.npz'
+    log_file = open(desc + '_log.txt', 'w')
+
     # Model options
     model_options = locals().copy()
     data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
@@ -765,10 +760,7 @@ def train(dim_input=200,  # input vector dimensionality
     grads = tensor.grad(tot_cost, itemlist(tparams))
     print('Done')
 
-    clip_grad = 1.
-    clip_grads = [tensor.clip(g, -clip_grad, clip_grad) for g in grads]
-    all_grads = clip_grads
-
+    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 10.)
     # update function
     all_gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
                    for k, p in tparams.iteritems()]
@@ -830,11 +822,14 @@ def train(dim_input=200,  # input vector dimensionality
 
             # verbose
             if numpy.mod(uidx, dispFreq) == 0:
-                print 'Epoch ', eidx, 'Update ', uidx, 'VaeCost ', np.mean(tr_costs[0]), 'AuxCost ', np.mean(tr_costs[1]), \
-                    'KldCost ', np.mean(tr_costs[3]), 'TotCost ', np.mean(tr_costs[2]), 'ElboCost ', np.mean(tr_costs[4]), \
-                    'NllRev ', np.mean(tr_costs[5]), 'NllGen ', np.mean(tr_costs[6]), 'KL_start ', kl_start
+                str1 = 'Epoch {:d}  Update {:d}  VaeCost {:.2f}  AuxCost {:.2f}  KldCost {:.2f}  TotCost {:.2f}  ElboCost {:.2f}  NllRev {:.2f}  NllGen {:.2f}  KL_start {:.2f}'.format(
+                    eidx, uidx, np.mean(tr_costs[0]), np.mean(tr_costs[1]), np.mean(tr_costs[3]), np.mean(tr_costs[2]), np.mean(tr_costs[4]), \
+                    np.mean(tr_costs[5]), np.mean(tr_costs[6]), kl_start)
+                print(str1)
+                log_file.write(str1 + '\n')
+                log_file.flush()
 
-        if eidx in [50, 250]:
+        if eidx in [10, 50]:
             lrate = lrate / 2.0
 
         # save the best model so far
@@ -851,9 +846,9 @@ def train(dim_input=200,  # input vector dimensionality
         valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
         test_err = pred_probs(f_log_probs, model_options, data, source='test')
         history_errs.append(valid_err)
-
-        print 'Validation ELBO: ', valid_err
-        print 'Test ELBO: ', test_err
+        str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
+        print(str1)
+        log_file.write(str1 + '\n')
 
         # finish after this many updates
         if uidx >= finish_after:
@@ -862,14 +857,10 @@ def train(dim_input=200,  # input vector dimensionality
 
     valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
     test_err = pred_probs(f_log_probs, model_options, data, source='test')
-    print 'Validation ELBO: ', valid_err
-    print 'Test ELBO: ', test_err
-
-    params = copy.copy(best_p)
-    numpy.savez(saveto, zipped_params=best_p,
-                history_errs=history_errs,
-                **params)
-
+    str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
+    print(str1)
+    log_file.write(str1 + '\n')
+    log_file.close()
     return valid_err
 
 
