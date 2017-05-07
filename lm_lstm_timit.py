@@ -479,7 +479,7 @@ def latent_lstm_layer(
             encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
             encoder_mus = tensor.dot(encoder_hidden, inf_mus_w) + inf_mus_b
             encoder_mu, encoder_sigma = encoder_mus[:, :z_dim], encoder_mus[:, z_dim:]
-            tild_z_t = encoder_mu +  g_s * tensor.exp(0.5 * encoder_sigma)
+            tild_z_t = encoder_mu + g_s * tensor.exp(0.5 * encoder_sigma)
             kld = gaussian_kld(encoder_mu, encoder_sigma, z_mu, z_sigma)
             kld = tensor.sum(kld, axis=-1)
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
@@ -716,12 +716,15 @@ def train(dim_input=200,  # input vector dimensionality
     dim_z = 256
     encoder_hidden = dim
     learn_h0 = False
-    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate'
-    saveto = desc + '.npz'
-    log_file = open(desc + '_log.txt', 'w')
+
+    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
 
     # Model options
     model_options = locals().copy()
+    pkl.dump(model_options, open(opts, 'wb'))
+    log_file = open(desc, 'w')
+
     data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
 
     print('Building model')
@@ -831,16 +834,6 @@ def train(dim_input=200,  # input vector dimensionality
 
         if eidx in [10, 50]:
             lrate = lrate / 2.0
-
-        # save the best model so far
-        print('Saving...')
-        if best_p is not None:
-            params = best_p
-        else:
-            params = unzip(tparams)
-        numpy.savez(saveto, **params)
-        pkl.dump(model_options, open('%s.pkl' % saveto, 'wb'))
-        print('Done')
 
         print 'Starting validation...'
         valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
