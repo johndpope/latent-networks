@@ -548,6 +548,9 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='ff_out_z',
+                                nin=options['dim_z'],
+                                nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
                                 nout=2 * options['dim_input'],
@@ -623,7 +626,8 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out = lrelu(out_lstm + out_prev)
+    out_z = get_layer('ff')[1](tparams, z, options, prefix='ff_out_z', activ='linear')
+    out = lrelu(out_lstm + out_prev + out_z)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
 
@@ -769,7 +773,7 @@ def train(dim_input=200,  # input vector dimensionality
                    for k, p in tparams.iteritems()]
     all_gsup = [(gs, g) for gs, g in zip(all_gshared, all_grads)]
     # forward pass + gradients
-    outputs = [vae_cost, aux_cost, tot_cost, kld_cost, elbo_cost, nll_rev_cost, nll_gen_cost]
+    outputs = [vae_cost, aux_cost, tot_cost, kld_cost, elbo_cost, nll_rev_cost, nll_gen_cost, non_finite]
     print('Fprop')
     f_prop = theano.function(inps, outputs, updates=all_gsup)
     print('Fupdate')
@@ -809,9 +813,13 @@ def train(dim_input=200,  # input vector dimensionality
             ud_start = time.time()
             # compute cost, grads and copy grads to shared variables
             zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], x.shape[1], model_options['dim_z'])).astype('float32')
-            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np = \
+            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np, not_finite_np = \
                 f_prop(x, y, x_mask, zmuv, np.float32(kl_start))
-            f_update(numpy.float32(lrate))
+            if numpy.isnan(tot_cost_np) or numpy.isinf(tot_cost_np) or not_finite_np:
+                print('Nan cost... skipping')
+                continue
+            else:
+                f_update(numpy.float32(lrate))
 
             # update costs
             tr_costs[0].append(vae_cost_np)
@@ -832,7 +840,7 @@ def train(dim_input=200,  # input vector dimensionality
                 log_file.write(str1 + '\n')
                 log_file.flush()
 
-        if eidx in [10, 50]:
+        if eidx in [10, 20]:
             lrate = lrate / 2.0
 
         print 'Starting validation...'
