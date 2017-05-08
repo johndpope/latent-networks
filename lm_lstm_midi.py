@@ -671,8 +671,10 @@ def pred_probs(f_log_probs, options, data, source='valid'):
         zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(
             x.shape[0], x.shape[1], options['dim_z'])).astype('float32')
         elbo = f_log_probs(x, y, x_mask, zmuv)
-        for val in elbo:
-            rvals.append(val)
+	nex = numpy.sum(x_mask, axis=0)
+        for elbo_i, nex_i in zip(elbo, nex):
+	    if nex_i > 0:
+	        rvals.append(elbo_i)
     return numpy.array(rvals).mean()
 
 
@@ -722,7 +724,7 @@ def train(dim_input=200,  # input vector dimensionality
           use_dropout=False,
           reload_=False,
           kl_start=0.2,
-          weight_aux=0.,
+	  weight_aux=0.,
           kl_rate=0.0003):
 
     prior_hidden = dim
