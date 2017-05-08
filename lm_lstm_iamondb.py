@@ -10,7 +10,7 @@ import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import cPickle as pkl
-import ipdb
+from ipdb import set_trace as dbg
 import numpy
 import copy
 
@@ -451,8 +451,8 @@ def latent_lstm_layer(
                                                      -1))
     if one_step:
         mask = mask.dimshuffle(0, 'x')
-        h, c = _step(mask, lstm_state_below, init_state, init_memory)
-        rval = [h, c]
+        h, c, z, _, _ = _step(mask, lstm_state_below, init_state, init_memory)
+        rval = [h, c, z]
     else:
         if mask.ndim == 3 and mask.ndim == state_below.ndim:
             mask = mask.reshape((mask.shape[0], \
@@ -626,6 +626,82 @@ def adam(lr, tparams, gshared, beta1=0.9, beta2=0.99, e=1e-5):
     return f_update
 
 
+# build a sampler
+def build_sampler(tparams, options, trng):
+    # x: 1 x 1
+    last_y = tensor.matrix('last_step', dtype='float32')
+    init_state = tensor.matrix('init_state', dtype='float32')
+    init_memory = tensor.matrix('init_memory', dtype='float32')
+    gaussian_sampled = tensor.matrix('gaussian', dtype='float32')
+
+    # if it's the first word, emb should be all zero
+    last_y = tensor.switch(last_y[:, None] < 0,
+                           tensor.alloc(0., 1, options["dim_input"]),
+                           last_y)
+
+    emb = get_layer('ff')[1](tparams, last_y, options, prefix='ff_in_lstm', activ='lrelu')
+
+    # apply one step of gru layer
+    rvals, update_gen = get_layer('latent_lstm')[1](tparams, emb, options,
+                                       prefix='encoder',
+                                       mask=None,
+                                       one_step=True,
+                                       gaussian_s=gaussian_sampled,
+                                       back_states=None,
+                                       init_state=init_state,
+                                       init_memory=init_memory)
+    next_state, next_memory, z = rvals
+
+    # Compute parameters of the output distribution
+    out_lstm = get_layer('ff')[1](tparams, next_state, options, prefix='ff_out_lstm', activ='linear')
+    out_prev = get_layer('ff')[1](tparams, emb, options, prefix='ff_out_prev', activ='linear')
+    out = lrelu(out_lstm + out_prev)
+    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
+    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
+    out_mu = T.clip(out_mu, -8., 8.)
+    out_logvar = T.clip(out_logvar, -8., 8.)
+
+    next_samples = trng.normal(size=out_mu.shape, avg=out_mu, std=T.sqrt(T.exp(out_logvar)))
+    next_probs = log_prob_gaussian(next_samples, mean=out_mu, log_var=out_logvar)
+
+    # next word probability
+    print('Building f_next..',)
+    inps = [last_y, init_state, init_memory, gaussian_sampled]
+    outs = [next_probs, next_samples, next_state, next_memory]
+    f_next = theano.function(inps, outs, name='f_next', profile=profile)
+    print('Done')
+
+    return f_next
+
+
+# generate sample
+def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
+
+    sample = []
+    sample_score = 0
+
+    # initial token is indicated by a -1 and initial state is zero
+    next_s = -1 * numpy.ones((1, 3)).astype('float32')
+    next_state = numpy.zeros((1, options['dim'])).astype('float32')
+    next_memory = numpy.zeros((1, options['dim'])).astype('float32')
+
+    for ii in range(maxlen):
+        inps = [next_s, next_state, next_memory]
+        ret = f_next(*inps)
+        next_p, next_s, next_state, next_memory = ret[0], ret[1], ret[2]
+
+        if argmax:
+            nw = next_p[0].argmax()
+        else:
+            nw = next_s[0]
+        sample.append(nw)
+        sample_score += next_p[0, nw]
+        if nw == 0:
+            break
+
+    return sample, sample_score
+
+
 def train(dim_input=3,  # input vector dimensionality
           dim=1200,  # the number of GRU units
           dim_proj=600,  # the number of GRU units
@@ -660,6 +736,8 @@ def train(dim_input=3,  # input vector dimensionality
 
     desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
     opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    # model_file = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
+    model_file = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
 
     print(desc)
 
@@ -668,21 +746,18 @@ def train(dim_input=3,  # input vector dimensionality
     pkl.dump(model_options, open(opts, 'wb'))
     log_file = open(desc, 'w')
 
-    data_path = './datasets/iamondb/'
-    from iamondb import IAMOnDB
-    iamondb = IAMOnDB(name='train',
-                      prep='normalize',
-                      cond=False,
-                      path=data_path)
-    iamondb_valid = IAMOnDB(name='valid',
-                      prep='normalize',
-                      cond=False,
-                      path=data_path,
-                      X_mean=iamondb.X_mean, X_std=iamondb.X_std)
-
     print('Building model')
     params = init_params(model_options)
     tparams = init_tparams(params)
+
+    # reload parameters
+    if True: #reload_ and os.path.exists(saveto):
+        params = load_params(model_file, params)
+        dbg()
+        trng = RandomStreams(42)
+        f_next = build_sampler(tparams, model_options, trng)
+        sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=200, argmax=False)
+        dbg()
 
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
@@ -735,6 +810,19 @@ def train(dim_input=3,  # input vector dimensionality
         history_errs = list(numpy.load(saveto)['history_errs'])
     best_p = None
     bad_count = 0
+
+    # Load data
+    data_path = './datasets/iamondb/'
+    from iamondb import IAMOnDB
+    iamondb = IAMOnDB(name='train',
+                      prep='normalize',
+                      cond=False,
+                      path=data_path)
+    iamondb_valid = IAMOnDB(name='valid',
+                      prep='normalize',
+                      cond=False,
+                      path=data_path,
+                      X_mean=iamondb.X_mean, X_std=iamondb.X_std)
 
     # Training loop
     uidx = 0
