@@ -79,20 +79,19 @@ def nll_BiGauss(y, mu, logvar, corr, binary):
     mu     : FullyConnected (Linear)
     logvar : FullyConnected (Linear)
     """
-    n_out = mu.shape[-1] // 2
-    mu_1, mu_2 = mu[:, :n_out], mu[:, n_out:]
+    mu_1, mu_2 = mu[:, 0].reshape((-1, 1)), mu[:, 1].reshape((-1, 1))
 
-    logvar_1, logvar_2 = logvar[:, :n_out], logvar[:, n_out:]
+    logvar_1, logvar_2 = logvar[:, 0].reshape((-1, 1)), logvar[:, 1].reshape((-1, 1))
     logsig_1, logsig_2 = 0.5 * logvar_1, 0.5 * logvar_2
     sig_1, sig_2 = T.exp(logsig_1), T.exp(logsig_2)
 
-    y0 = y[:, 0].reshape((-1, 1))
-    y1 = y[:, 1].reshape((-1, 1))
-    y2 = y[:, 2].reshape((-1, 1))
+    y0 = y[:, :, 0].reshape((-1, 1))
+    y1 = y[:, :, 1].reshape((-1, 1))
+    y2 = y[:, :, 2].reshape((-1, 1))
     corr = corr.reshape((-1, 1))
 
     c_b =  T.sum(T.xlogx.xlogy0(y0, binary) +
-                 T.xlogx.xlogy0(1 - y0, 1 - binary), axis=-1)
+                 T.xlogx.xlogy0(1 - y0, 1 - binary), axis=1)
 
     inner1 =  ((0.5*T.log(1-corr**2)) + logsig_1 + logsig_2 + T.log(2 * np.pi))
 
@@ -102,7 +101,7 @@ def nll_BiGauss(y, mu, logvar, corr, binary):
     inner2 = 0.5 * (1. / (1. - corr**2))
     cost = - (inner1 + (inner2 * z))
 
-    nll = -T.sum(cost, axis=-1) - c_b
+    nll = -T.sum(cost, axis=1) - c_b
     return nll
 
 
@@ -523,7 +522,7 @@ def init_params(options):
                                 nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out',
                                 nin=options['dim'],
-                                nout=4 * options['dim_input'] + 2,
+                                nout=2 + 2 + 1 + 1, # 2 mus, 2 logvar, 1 corr and 1 binary
                                 ortho=False)
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -547,7 +546,7 @@ def init_params(options):
                                 nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_r',
                                 nin=options['dim'],
-                                nout=4 * options['dim_input'] + 2,
+                                nout=2 + 2 + 1 + 1, # 2 mus, 2 logvar, 1 corr and 1 binary
                                 ortho=False)
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
@@ -566,6 +565,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     yr = y[::-1]
     xr_mask = x_mask[::-1]
 
+
     xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
@@ -574,13 +574,13 @@ def build_rev_model(tparams, options, x, y, x_mask):
 
     def _slice(arr, idx):
         if idx == 'mu':
-          return arr[:, :, :2*options['dim_input']]
+          return arr[:, :, :2]
         elif idx == 'logvar':
-          return arr[:, :, 2*options['dim_input']:4*options['dim_input']]
+          return arr[:, :, 2:4]
         elif idx == 'corr':
-          return arr[:, :, 4*options['dim_input']:-1]
+          return arr[:, :, [-2]]
         elif idx == 'binary':
-          return arr[:, :, 4*options['dim_input']+1:]
+          return arr[:, :, [-1]]
 
     # Get parameters for the output distribution.
     out_r = get_layer('ff')[1](tparams, out, options, prefix='ff_out_r', activ='linear')
@@ -589,8 +589,16 @@ def build_rev_model(tparams, options, x, y, x_mask):
     corr = T.tanh(_slice(out_r, 'corr'))
     binary = T.nnet.sigmoid(_slice(out_r, 'binary'))
 
+    # Copy what they do in VRNN
+    x_shape = x.shape
+    out_mu = out_mu.reshape((x_shape[0]*x_shape[1], -1))
+    out_logvar = out_logvar.reshape((x_shape[0]*x_shape[1], -1))
+    corr = corr.reshape((x_shape[0]*x_shape[1], -1))
+    binary = binary.reshape((x_shape[0]*x_shape[1], -1))
+
     # ...
     nll_rev = nll_BiGauss(yr, out_mu, out_logvar, corr, binary)
+    nll_rev = nll_rev.reshape((x_shape[0], x_shape[1]))
     #log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
     #log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     #nll_rev = -log_p_y                    # NLL
@@ -616,13 +624,13 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
 
     def _slice(arr, idx):
         if idx == 'mu':
-          return arr[:, :, :2*options['dim_input']]
+          return arr[:, :, :2]
         elif idx == 'logvar':
-          return arr[:, :, 2*options['dim_input']:4*options['dim_input']]
+          return arr[:, :, 2:4]
         elif idx == 'corr':
-          return arr[:, :, 4*options['dim_input']:-1]
+          return arr[:, :, [-2]]
         elif idx == 'binary':
-          return arr[:, :, 4*options['dim_input']+1:]
+          return arr[:, :, [-1]]
 
     # Get parameters for the output distribution.
     ff_out = get_layer('ff')[1](tparams, out, options, prefix='ff_out', activ='linear')
@@ -631,8 +639,17 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     corr = T.tanh(_slice(ff_out, 'corr'))
     binary = T.nnet.sigmoid(_slice(ff_out, 'binary'))
 
+    # Copy what they do in VRNN
+    x_shape = x.shape
+    out_mu = out_mu.reshape((x_shape[0]*x_shape[1], -1))
+    out_logvar = out_logvar.reshape((x_shape[0]*x_shape[1], -1))
+    corr = corr.reshape((x_shape[0]*x_shape[1], -1))
+    binary = binary.reshape((x_shape[0]*x_shape[1], -1))
+
     # Compute gaussian log prob of target
     nll_gen = nll_BiGauss(y, out_mu, out_logvar, corr, binary)
+    nll_gen = nll_gen.reshape((x_shape[0], x_shape[1]))
+
     # log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
     # log_p_y = T.sum(log_p_y, axis=-1)  # Sum over output dim.
     # nll_gen = -log_p_y  # NLL
@@ -844,6 +861,12 @@ def train(dim_input=3,  # input vector dimensionality
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
     x_mask = tensor.matrix('x_mask')
+
+    # Debug test_value
+    #x.tag.test_value = np.random.rand(11, 20, 3).astype("float32")
+    #y.tag.test_value = np.random.rand(11, 20, 3).astype("float32")
+    #x_mask.tag.test_value = np.ones((11, 20)).astype("float32")
+
     zmuv = tensor.tensor3('zmuv')
     weight_f = tensor.scalar('weight_f')
     lr = tensor.scalar('lr')
