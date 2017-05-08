@@ -829,7 +829,7 @@ def train(dim_input=3,  # input vector dimensionality
     # Load data
     data_path = './datasets/iamondb/'
     from iamondb import IAMOnDB
-    iamondb = IAMOnDB(name='valid',
+    iamondb = IAMOnDB(name='train',
                       prep='normalize',
                       cond=False,
                       path=data_path)
