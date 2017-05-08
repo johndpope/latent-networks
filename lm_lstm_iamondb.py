@@ -585,7 +585,7 @@ def pred_probs(f_log_probs, options, dataset, batch_size, source='valid'):
         end = start + batch_size
         # x.shape : seq_len, batch_size, input_dim
         x, x_mask = dataset.slices(start, end)
-        y = x[1:]
+        y = x
         x = np.concatenate([np.zeros_like(x[[0]]), x[:-1]], axis=0)
 
         n_done += x.shape[1]

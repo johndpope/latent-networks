@@ -327,13 +327,11 @@ if __name__ == "__main__":
 
     data_path = './datasets/iamondb/'
     iamondb = IAMOnDB(name='valid',
-                      prep='normalize',
+                      prep=None,
                       cond=False,
                       path=data_path)
 
     batch = iamondb.slices(start=0, end=10)
-    from ipdb import set_trace as dbg
-    dbg()
     X = iamondb.data[0]
     sub_X = X
 
