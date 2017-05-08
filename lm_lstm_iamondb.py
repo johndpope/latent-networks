@@ -22,6 +22,8 @@ from collections import OrderedDict
 #from char_data_iterator import TextIterator
 
 profile = False
+seed = 1234
+numpy.random.seed(seed)
 
 
 def gradient_clipping(grads, tparams, clip_c=1.0):
@@ -620,8 +622,8 @@ def adam(lr, tparams, gshared, beta1=0.9, beta2=0.99, e=1e-5):
     return f_update
 
 
-def train(dim_input=200,  # input vector dimensionality
-          dim=2000,  # the number of GRU units
+def train(dim_input=3,  # input vector dimensionality
+          dim=1200,  # the number of GRU units
           dim_proj=600,  # the number of GRU units
           encoder='lstm',
           patience=10,  # early stopping patience
@@ -644,7 +646,7 @@ def train(dim_input=200,  # input vector dimensionality
           use_dropout=False,
           reload_=False,
           kl_start=0.2,
-          weight_aux=0.0005,
+          weight_aux=0.,
           kl_rate=0.0003):
 
     prior_hidden = dim
@@ -652,8 +654,8 @@ def train(dim_input=200,  # input vector dimensionality
     encoder_hidden = dim
     learn_h0 = False
 
-    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
-    opts = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    desc = saveto + 'seed_' + str(seed) + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'seed_' + str(seed) + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
 
     # Model options
     model_options = locals().copy()

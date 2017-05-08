@@ -14,7 +14,7 @@ def main(job_id, params):
         lrate=params['learning-rate'][0],
         optimizer=params['optimizer'][0],
         dim_proj=params['dim_proj'][0],
-        batch_size=32,
+        batch_size=16,
         valid_batch_size=32,
         dispFreq=10,
         saveFreq=1000,
@@ -24,7 +24,8 @@ def main(job_id, params):
         dictionary=None,
         use_dropout=params['use-dropout'][0],
         kl_start=1.0,
-        kl_rate=0.00005)
+        kl_rate=0.00005,
+        weight_aux=0.0005)
     return validerr
 
 if __name__ == '__main__':
@@ -38,7 +39,7 @@ if __name__ == '__main__':
     main(0, {
         'model': [exp_dir],
         'dim_input': [3],
-        'dim': [2000],
+        'dim': [1200],
         'dim_proj': [600],
         'optimizer': ['adam'],
         'decay-c': [0.],
