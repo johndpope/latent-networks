@@ -744,7 +744,7 @@ def train(dim_input=200,  # input vector dimensionality
             end = start + batch_size
             # x.shape : seq_len, batch_size, input_dim
             x, x_mask = iamondb.slices(start, end)
-            y = x[1:]
+            y = x
             x = np.concatenate([np.zeros_like(x[[0]]), x[:-1]], axis=0)
 
             n_samples += x.shape[1]
