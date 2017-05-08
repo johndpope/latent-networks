@@ -563,8 +563,7 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out_z = get_layer('ff')[1](tparams, z, options, prefix='ff_out_z', activ='linear')
-    out = lrelu(out_lstm + out_prev + out_z)
+    out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
     out_mu = T.clip(out_mu, -8., 8.)
@@ -662,8 +661,10 @@ def train(dim_input=3,  # input vector dimensionality
     encoder_hidden = dim
     learn_h0 = False
 
-    desc = saveto + 'seed_' + str(seed) + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
-    opts = saveto + 'seed_' + str(seed) + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+
+    print(desc)
 
     # Model options
     model_options = locals().copy()
@@ -793,7 +794,7 @@ def train(dim_input=3,  # input vector dimensionality
                 log_file.write(str1 + '\n')
                 log_file.flush()
 
-        if eidx in [10, 20]:
+        if eidx in [10, 50]:
             lrate = lrate / 2.0
 
         print('Starting validation...')
