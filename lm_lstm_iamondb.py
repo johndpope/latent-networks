@@ -483,9 +483,6 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_z',
-                                nin=options['dim_z'],
-                                nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
                                 nout=2 * options['dim_input'],
