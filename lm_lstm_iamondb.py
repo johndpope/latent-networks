@@ -669,7 +669,8 @@ def train(dim_input=200,  # input vector dimensionality
     iamondb_valid = IAMOnDB(name='valid',
                       prep='normalize',
                       cond=False,
-                      path=data_path)
+                      path=data_path,
+                      X_mean=iamondb.X_mean, X_std=iamondb.X_std)
 
     print('Building model')
     params = init_params(model_options)
