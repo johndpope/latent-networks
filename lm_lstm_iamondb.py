@@ -70,6 +70,42 @@ def gaussian_kld(mu_left, logvar_left, mu_right, logvar_right):
     return gauss_klds
 
 
+def nll_BiGauss(y, mu, logvar, corr, binary):
+    """
+    Gaussian mixture model negative log-likelihood
+    Parameters
+    ----------
+    y      : TensorVariable
+    mu     : FullyConnected (Linear)
+    logvar : FullyConnected (Linear)
+    """
+    n_out = mu.shape[-1] // 2
+    mu_1, mu_2 = mu[:, :n_out], mu[:, n_out:]
+
+    logvar_1, logvar_2 = logvar[:, :n_out], logvar[:, n_out:]
+    logsig_1, logsig_2 = 0.5 * logvar_1, 0.5 * logvar_2
+    sig_1, sig_2 = T.exp(logsig_1), T.exp(logsig_2)
+
+    y0 = y[:, 0].reshape((-1, 1))
+    y1 = y[:, 1].reshape((-1, 1))
+    y2 = y[:, 2].reshape((-1, 1))
+    corr = corr.reshape((-1, 1))
+
+    c_b =  T.sum(T.xlogx.xlogy0(y0, binary) +
+                 T.xlogx.xlogy0(1 - y0, 1 - binary), axis=-1)
+
+    inner1 =  ((0.5*T.log(1-corr**2)) + logsig_1 + logsig_2 + T.log(2 * np.pi))
+
+    z = (((y1 - mu_1) / sig_1)**2 + ((y2 - mu_2) / sig_2)**2 -
+         (2. * (corr * (y1 - mu_1) * (y2 - mu_2)) / (sig_1 * sig_2)))
+
+    inner2 = 0.5 * (1. / (1. - corr**2))
+    cost = - (inner1 + (inner2 * z))
+
+    nll = -T.sum(cost, axis=-1) - c_b
+    return nll
+
+
 # get the list of parameters: Note that tparams must be OrderedDict
 def itemlist(tparams):
     return [vv for kk, vv in tparams.iteritems()]
@@ -451,8 +487,10 @@ def latent_lstm_layer(
                                                      -1))
     if one_step:
         mask = mask.dimshuffle(0, 'x')
-        h, c, z, _, _ = _step(mask, lstm_state_below, init_state, init_memory)
+        _step_inps = [mask, lstm_state_below, None, gaussian_s, init_state, init_memory] + non_seqs
+        h, c, z, _, _ = _step(*_step_inps)
         rval = [h, c, z]
+        updates = {}
     else:
         if mask.ndim == 3 and mask.ndim == state_below.ndim:
             mask = mask.reshape((mask.shape[0], \
@@ -483,9 +521,9 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
+    params = get_layer('ff')[0](options, params, prefix='ff_out',
                                 nin=options['dim'],
-                                nout=2 * options['dim_input'],
+                                nout=4 * options['dim_input'] + 2,
                                 ortho=False)
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -507,9 +545,9 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev_r',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mus_r',
+    params = get_layer('ff')[0](options, params, prefix='ff_out_r',
                                 nin=options['dim'],
-                                nout=2 * options['dim_input'],
+                                nout=4 * options['dim_input'] + 2,
                                 ortho=False)
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
@@ -533,15 +571,29 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
     out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
     out = lrelu(out_lstm + out_prev)
-    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
-    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    out_mu = T.clip(out_mu, -8., 8.)
-    out_logvar = T.clip(out_logvar, -8., 8.)
+
+    def _slice(arr, idx):
+        if idx == 'mu':
+          return arr[:, :, :2*options['dim_input']]
+        elif idx == 'logvar':
+          return arr[:, :, 2*options['dim_input']:4*options['dim_input']]
+        elif idx == 'corr':
+          return arr[:, :, 4*options['dim_input']:-1]
+        elif idx == 'binary':
+          return arr[:, :, 4*options['dim_input']+1:]
+
+    # Get parameters for the output distribution.
+    out_r = get_layer('ff')[1](tparams, out, options, prefix='ff_out_r', activ='linear')
+    out_mu = T.clip(_slice(out_r, 'mu'), -8., 8.)
+    out_logvar = T.clip(_slice(out_r, 'logvar'), -8., 8.)
+    corr = T.tanh(_slice(out_r, 'corr'))
+    binary = T.nnet.sigmoid(_slice(out_r, 'binary'))
 
     # ...
-    log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
-    log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
-    nll_rev = -log_p_y                    # NLL
+    nll_rev = nll_BiGauss(yr, out_mu, out_logvar, corr, binary)
+    #log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
+    #log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
+    #nll_rev = -log_p_y                    # NLL
     nll_rev = (nll_rev * xr_mask).sum(0)
     return nll_rev, states_rev[::-1], updates_rev
 
@@ -561,15 +613,29 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
     out = lrelu(out_lstm + out_prev)
-    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    out_mu = T.clip(out_mu, -8., 8.)
-    out_logvar = T.clip(out_logvar, -8., 8.)
+
+    def _slice(arr, idx):
+        if idx == 'mu':
+          return arr[:, :, :2*options['dim_input']]
+        elif idx == 'logvar':
+          return arr[:, :, 2*options['dim_input']:4*options['dim_input']]
+        elif idx == 'corr':
+          return arr[:, :, 4*options['dim_input']:-1]
+        elif idx == 'binary':
+          return arr[:, :, 4*options['dim_input']+1:]
+
+    # Get parameters for the output distribution.
+    ff_out = get_layer('ff')[1](tparams, out, options, prefix='ff_out', activ='linear')
+    out_mu = T.clip(_slice(ff_out, 'mu'), -8., 8.)
+    out_logvar = T.clip(_slice(ff_out, 'logvar'), -8., 8.)
+    corr = T.tanh(_slice(ff_out, 'corr'))
+    binary = T.nnet.sigmoid(_slice(ff_out, 'binary'))
 
     # Compute gaussian log prob of target
-    log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
-    log_p_y = T.sum(log_p_y, axis=-1)  # Sum over output dim.
-    nll_gen = -log_p_y  # NLL
+    nll_gen = nll_BiGauss(y, out_mu, out_logvar, corr, binary)
+    # log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
+    # log_p_y = T.sum(log_p_y, axis=-1)  # Sum over output dim.
+    # nll_gen = -log_p_y  # NLL
     nll_gen = (nll_gen * x_mask).sum(0)
     kld = (kld * x_mask).sum(0)
     rec_cost_rev = (rec_cost_rev * x_mask).sum(0)
@@ -635,7 +701,7 @@ def build_sampler(tparams, options, trng):
     gaussian_sampled = tensor.matrix('gaussian', dtype='float32')
 
     # if it's the first word, emb should be all zero
-    last_y = tensor.switch(last_y[:, None] < 0,
+    last_y = tensor.switch(last_y[:, 0] < 0,
                            tensor.alloc(0., 1, options["dim_input"]),
                            last_y)
 
@@ -657,12 +723,12 @@ def build_sampler(tparams, options, trng):
     out_prev = get_layer('ff')[1](tparams, emb, options, prefix='ff_out_prev', activ='linear')
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
+    out_mu, out_logvar = out_mus[:, :options['dim_input']], out_mus[:, options['dim_input']:]
     out_mu = T.clip(out_mu, -8., 8.)
     out_logvar = T.clip(out_logvar, -8., 8.)
 
     next_samples = trng.normal(size=out_mu.shape, avg=out_mu, std=T.sqrt(T.exp(out_logvar)))
-    next_probs = log_prob_gaussian(next_samples, mean=out_mu, log_var=out_logvar)
+    next_probs = T.sum(log_prob_gaussian(next_samples, mean=out_mu, log_var=out_logvar), axis=1)
 
     # next word probability
     print('Building f_next..',)
@@ -686,18 +752,15 @@ def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
     next_memory = numpy.zeros((1, options['dim'])).astype('float32')
 
     for ii in range(maxlen):
-        inps = [next_s, next_state, next_memory]
-        ret = f_next(*inps)
-        next_p, next_s, next_state, next_memory = ret[0], ret[1], ret[2]
+        zmuv = numpy.random.normal(loc=0.0, scale=1.0,
+                                   size=(next_s.shape[0], options['dim_z'])).astype('float32')
 
-        if argmax:
-            nw = next_p[0].argmax()
-        else:
-            nw = next_s[0]
-        sample.append(nw)
-        sample_score += next_p[0, nw]
-        if nw == 0:
-            break
+        inps = [next_s, next_state, next_memory, zmuv]
+        ret = f_next(*inps)
+        next_p, next_s, next_state, next_memory = ret
+
+        sample.append(next_s)
+        sample_score += next_p
 
     return sample, sample_score
 
@@ -746,17 +809,36 @@ def train(dim_input=3,  # input vector dimensionality
     pkl.dump(model_options, open(opts, 'wb'))
     log_file = open(desc, 'w')
 
+    # Load data
+    data_path = './datasets/iamondb/'
+    from iamondb import IAMOnDB
+    iamondb = IAMOnDB(name='valid',
+                      prep='normalize',
+                      cond=False,
+                      path=data_path)
+    iamondb_valid = IAMOnDB(name='valid',
+                      prep='normalize',
+                      cond=False,
+                      path=data_path,
+                      X_mean=iamondb.X_mean, X_std=iamondb.X_std)
+
+
     print('Building model')
     params = init_params(model_options)
     tparams = init_tparams(params)
 
     # reload parameters
-    if True: #reload_ and os.path.exists(saveto):
+    if reload_ and os.path.isfile(model_file):
         params = load_params(model_file, params)
-        dbg()
         trng = RandomStreams(42)
         f_next = build_sampler(tparams, model_options, trng)
         sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=200, argmax=False)
+        dbg()
+
+        from iamondb_utils import plot_lines_iamondb_example
+        # Un-normlize data
+        sample = iamondb.X_mean + sample * iamondb.X_std
+        plot_lines_iamondb_example(sample, show=True)
         dbg()
 
     x = tensor.tensor3('x')
@@ -810,19 +892,6 @@ def train(dim_input=3,  # input vector dimensionality
         history_errs = list(numpy.load(saveto)['history_errs'])
     best_p = None
     bad_count = 0
-
-    # Load data
-    data_path = './datasets/iamondb/'
-    from iamondb import IAMOnDB
-    iamondb = IAMOnDB(name='train',
-                      prep='normalize',
-                      cond=False,
-                      path=data_path)
-    iamondb_valid = IAMOnDB(name='valid',
-                      prep='normalize',
-                      cond=False,
-                      path=data_path,
-                      X_mean=iamondb.X_mean, X_std=iamondb.X_std)
 
     # Training loop
     uidx = 0
