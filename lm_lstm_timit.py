@@ -726,8 +726,8 @@ def train(dim_input=200,  # input vector dimensionality
     encoder_hidden = dim
     learn_h0 = False
 
-    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
-    opts = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    desc = saveto + 'seed_' + seed + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'seed_' + seed + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
 
     print(desc)
 
