@@ -171,10 +171,6 @@ def unzip(zipped):
         new_params[kk] = vv.get_value()
     return new_params
 
-from fuel.datasets import SVHN
-from fuel.schemes import ShuffledScheme
-from fuel.streams import DataStream
-
 def create_streams(train_set, valid_set, test_set, training_batch_size,
                    monitoring_batch_size):
     """Creates data streams for training and monitoring.
@@ -197,6 +193,8 @@ def create_streams(train_set, valid_set, test_set, training_batch_size,
         Data streams for the main loop, the training set monitor,
         the validation set monitor and the test set monitor.
     """
+    from fuel.schemes import ShuffledScheme
+    from fuel.streams import DataStream
     main_loop_stream = DataStream.default_stream(
         dataset=train_set,
         iteration_scheme=ShuffledScheme(
@@ -232,6 +230,7 @@ def create_svhn_streams(training_batch_size, monitoring_batch_size):
         Data streams for the main loop, the training set monitor,
         the validation set monitor and the test set monitor.
     """
+    from fuel.datasets import SVHN
     train_set = SVHN(2, ('train',), sources=('features',),
                      subset=slice(0, 63257))
     valid_set = SVHN(2, ('train',), sources=('features',),
@@ -245,6 +244,9 @@ def create_gaussian_mixture_data_streams(batch_size, monitoring_batch_size,
                                          means=None, variances=None, priors=None,
                                          rng=None, num_examples=100000,
                                          sources=('features', )):
+    from fuel.schemes import ShuffledScheme
+    from fuel.streams import DataStream
+
     train_set = GaussianMixture(num_examples=num_examples, means=means,
                                 variances=variances, priors=priors,
                                 rng=rng, sources=sources)
@@ -278,3 +280,126 @@ def save_params(params, filename, symlink=None):
         if os.path.lexists(symlink):
             os.remove(symlink)
         os.symlink(filename, symlink)
+
+
+def tolist(arg):
+    if type(arg) is not list:
+        if isinstance(arg, tuple):
+            return list(arg)
+        else:
+            return [arg]
+    return arg
+
+
+def totuple(arg):
+    if type(arg) is not tuple:
+        if isinstance(arg, list):
+            return tuple(arg)
+        else:
+            return (arg,)
+    return arg
+
+
+from numpy.lib.stride_tricks import as_strided
+def segment_axis(a, length, overlap=0, axis=None, end='cut', endvalue=0):
+    """Generate a new array that chops the given array along the given axis
+    into overlapping frames.
+    This code has been implemented by Anne Archibald and has been discussed
+    on the ML.
+    Parameters
+    ----------
+    a : array-like
+        The array to segment
+    length : int
+        The length of each frame
+    overlap : int, optional
+        The number of array elements by which the frames should overlap
+    axis : int, optional
+        The axis to operate on; if None, act on the flattened array
+    end : {'cut', 'wrap', 'end'}, optional
+        What to do with the last frame, if the array is not evenly
+        divisible into pieces.
+            - 'cut'   Simply discard the extra values
+            - 'wrap'  Copy values from the beginning of the array
+            - 'pad'   Pad with a constant value
+    endvalue : object
+        The value to use for end='pad'
+    Examples
+    --------
+    >>> segment_axis(arange(10), 4, 2)
+    array([[0, 1, 2, 3],
+           [2, 3, 4, 5],
+           [4, 5, 6, 7],
+           [6, 7, 8, 9]])
+    Notes
+    -----
+    The array is not copied unless necessary (either because it is
+    unevenly strided and being flattened or because end is set to
+    'pad' or 'wrap').
+    use as_strided
+    """
+
+    if axis is None:
+        a = np.ravel(a) # may copy
+        axis = 0
+
+    l = a.shape[axis]
+
+    if overlap>=length:
+        raise ValueError, "frames cannot overlap by more than 100%"
+    if overlap<0 or length<=0:
+        raise ValueError, "overlap must be nonnegative and length must be "\
+                          "positive"
+
+    if l<length or (l-length)%(length-overlap):
+        if l>length:
+            roundup = length + \
+                      (1+(l-length)//(length-overlap))*(length-overlap)
+            rounddown = length + \
+                        ((l-length)//(length-overlap))*(length-overlap)
+        else:
+            roundup = length
+            rounddown = 0
+        assert rounddown<l<roundup
+        assert roundup==rounddown+(length-overlap) or \
+               (roundup==length and rounddown==0)
+        a = a.swapaxes(-1,axis)
+
+        if end=='cut':
+            a = a[...,:rounddown]
+        elif end in ['pad','wrap']: # copying will be necessary
+            s = list(a.shape)
+            s[-1]=roundup
+            b = np.empty(s,dtype=a.dtype)
+            b[...,:l] = a
+            if end=='pad':
+                b[...,l:] = endvalue
+            elif end=='wrap':
+                b[...,l:] = a[...,:roundup-l]
+            a = b
+
+        a = a.swapaxes(-1,axis)
+
+
+    l = a.shape[axis]
+    if l==0:
+        raise ValueError, "Not enough data points to segment array in 'cut' "\
+                          "mode; try 'pad' or 'wrap'"
+    assert l>=length
+    assert (l-length)%(length-overlap) == 0
+    n = 1+(l-length)//(length-overlap)
+    s = a.strides[axis]
+    newshape = a.shape[:axis] + (n,length) + a.shape[axis+1:]
+    newstrides = a.strides[:axis] + ((length-overlap)*s, s) + \
+                 a.strides[axis+1:]
+
+    try:
+        return as_strided(a, strides=newstrides, shape=newshape)
+    except TypeError:
+        warnings.warn("Problem with ndarray creation forces copy.")
+        a = a.copy()
+        # Shape doesn't change but strides does
+        newstrides = a.strides[:axis] + ((length-overlap)*s, s) + \
+                     a.strides[axis+1:]
+        return as_strided(a, strides=newstrides, shape=newshape)
+
