@@ -624,8 +624,8 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     next_batch = (lambda: data.get_valid_batch()) \
         if source == 'valid' else (lambda: data.get_test_batch())
     for x, y, x_mask in next_batch():
-        x = x.transpose(1, 0, 2)
-        y = y.transpose(1, 0, 2)
+        x = x.transpose(1, 0)
+        y = y.transpose(1, 0)
         x_mask = x_mask.transpose(1, 0)
         n_done += x.shape[1]
 
