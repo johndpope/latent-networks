@@ -766,7 +766,6 @@ def train(dim_input=200,  # input vector dimensionality
                                 X_mean=X_mean,
                                 X_std=X_std)
     train_d_ = Iterator(train_data, batch_size, start=0, end=2040064)
-
     valid_d_ = Iterator(valid_data, batch_size, start=2040064, end=2152704)
     print('Building model')
     params = init_params(model_options)
@@ -837,7 +836,7 @@ def train(dim_input=200,  # input vector dimensionality
         tr_costs = [[], [], [], [], [], [], []]
 
         #for x, y, x_mask in data.get_train_batch():
-        for data_ in train_data:
+        for data_ in train_d_:
             x = data_[0][0]
             y = data_[1][0]
             x_mask = np.ones((x.shape[0], x.shape[1]), dtype='float32')
