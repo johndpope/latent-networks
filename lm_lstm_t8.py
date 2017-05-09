@@ -27,6 +27,72 @@ seed = 1234
 numpy.random.seed(seed)
 
 
+def param_init_hsoftmax(options, params, nin, ncls, nout, prefix='hsoftmax'):
+    nout_per_cls = (nout + ncls - 1) / ncls
+    W1 = numpy.asarray(numpy.random.normal(
+        0, 0.01, size=(nin, ncls)), dtype=theano.config.floatX)
+    b1 = numpy.asarray(numpy.zeros((ncls,)), dtype=theano.config.floatX)
+
+    # Second level of h_softmax
+    W2 = numpy.asarray(numpy.random.normal(
+        0, 0.01, size=(ncls, nin, nout_per_cls)), dtype=theano.config.floatX)
+    b2 = numpy.asarray(numpy.zeros((ncls, nout_per_cls)), dtype=theano.config.floatX)
+
+    # store some private vars
+    options['hsoftmax_ncls'] = ncls
+    options['nvocab'] = nout
+    params[_p(prefix, 'W1')] = W1
+    params[_p(prefix, 'W2')] = W2
+    params[_p(prefix, 'b1')] = b1
+    params[_p(prefix, 'b2')] = b2
+    return params
+
+
+def hsoftmax_layer(tparams, state_below, options, y_indexes=None,
+                   prefix='hsoftmax', compute_all=False, **kwargs):
+    """
+    shape of state_below is expected to be: (#tsteps, #batchsize, #dim)
+    y_indexes: a theano variable of true targets.
+    """
+    ncls = options['hsoftmax_ncls']
+    nout = options['nvocab']
+    nout_per_cls = (nout + ncls - 1) / ncls
+    state_shp = state_below.shape
+
+    if state_below.ndim == 3:
+        reshaped = 1
+        state_reshp = state_below.reshape([state_shp[0] * state_shp[1], state_shp[2]])
+        batch_size = state_shp[1] * state_shp[0]
+    else:
+        reshaped = 0
+        state_reshp = state_below
+        batch_size = state_shp[0]
+
+    if compute_all:
+        # shape: (batch_size, output_size)  (batch size after reshaping)
+        output = tensor.nnet.h_softmax(state_reshp, batch_size, nout,
+                                       ncls, nout_per_cls,
+                                       tparams[_p(prefix, 'W1')],
+                                       tparams[_p(prefix, 'b1')],
+                                       tparams[_p(prefix, 'W2')],
+                                       tparams[_p(prefix, 'b2')])
+        if reshaped:
+            output = output.reshape([state_shp[0], state_shp[1], -1])
+    else:
+        if y_indexes != None:
+            y_indexes = y_indexes.flatten()
+        # shape: (batch_size,)
+        output = tensor.nnet.h_softmax(state_reshp, batch_size, nout,
+                                       ncls, nout_per_cls,
+                                       tparams[_p(prefix, 'W1')],
+                                       tparams[_p(prefix, 'b1')],
+                                       tparams[_p(prefix, 'W2')],
+                                       tparams[_p(prefix, 'b2')], y_indexes)
+        if reshaped:
+            output = output.reshape([state_shp[0], state_shp[1]])
+    return output
+
+
 def masked_softmax(x, axis=-1, mask=None):
     if mask is not None:
         x = (mask * x) + (1 - mask) * (-10)
@@ -140,6 +206,7 @@ layers = {
     'ff': ('param_init_fflayer', 'fflayer'),
     'gru': ('param_init_gru', 'gru_layer'),
     'lstm': ('param_init_lstm', 'lstm_layer'),
+    'hsoftmax': ('param_init_hsoftmax', 'hsoftmax_layer'),
     'latent_lstm': ('param_init_lstm', 'latent_lstm_layer'),
 }
 
@@ -503,15 +570,15 @@ def init_params(options):
                                 nin=options['dim_input'], nout=options['dim_proj'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_lstm',
-                                nin=options['dim'], nout=options['dim'],
+                                nin=options['dim'], nout=options['dim_proj'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
-                                nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
-                                nin=options['dim'],
-                                nout=options['dim_input'],
-                                ortho=False)
+                                nout=options['dim_proj'], ortho=False)
+    params = get_layer('hsoftmax')[0](options, params, prefix='ff_out_mus',
+                                      nin=options['dim_proj'],
+                                      ncls=300,
+                                      nout=options['dim_input'])
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -524,15 +591,15 @@ def init_params(options):
                                               dim=options['dim'])
     # readout
     params = get_layer('ff')[0](options, params, prefix='ff_out_lstm_r',
-                                nin=options['dim'], nout=options['dim'],
+                                nin=options['dim'], nout=options['dim_proj'],
                                 ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev_r',
                                 nin=options['dim_proj'],
-                                nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_mus_r',
-                                nin=options['dim'],
-                                nout=options['dim_input'],
-                                ortho=False)
+                                nout=options['dim_proj'], ortho=False)
+    params = get_layer('hsoftmax')[0](options, params, prefix='ff_out_mus_r',
+                                      nin=options['dim_proj'],
+                                      ncls=300,
+                                      nout=options['dim_input'])
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='z_mus', nin=options['prior_hidden'], nout=2 * options['dim_z'], ortho=False)
@@ -562,15 +629,14 @@ def build_rev_model(tparams, options, x, y, x_mask):
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
     out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
-    out = tensor.nnet.tanh(out_lstm + out_prev)
-    out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
-    out_mu = masked_softmax(out_mu, axis=2)
-
+    out = lrelu(out_lstm + out_prev)
     # shift mus for prediction [o4, o3, o2]
     # targets are [x3, x2, x1]
-    out_mu = out_mu[:-1]
+    out = out[:-1]
     targets = xr[1:]
     targets_mask = xr_mask[1:]
+    nll_rev = -get_layer('hsoftmax')[1](
+        tparams, out, options, y_indexes=targets, prefix='ff_out_mus_r')
     # states_rev = [s4, s3, s2, s1]
     # cut first state out (info about x4 is in s3)
     # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
@@ -578,7 +644,6 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # ...
     assert xr.ndim == 2
     assert xr_mask.ndim == 2
-    nll_rev = categorical_crossentropy(targets, out_mu)
     nll_rev = (nll_rev * targets_mask).sum(0)
     return nll_rev, states_rev, updates_rev
 
@@ -597,10 +662,9 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out = tensor.nnet.tanh(out_lstm + out_prev)
-    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mus = masked_softmax(out_mus, axis=2)
-    nll_gen = categorical_crossentropy(y, out_mus)
+    out = lrelu(out_lstm + out_prev)
+    nll_gen = -get_layer('hsoftmax')[1](
+        tparams, out, options, y_indexes=y, prefix='ff_out_mus')
     nll_gen = (nll_gen * x_mask).sum(0)
     kld = (kld * x_mask).sum(0)
     rec_cost_rev = (rec_cost_rev * x_mask).sum(0)
