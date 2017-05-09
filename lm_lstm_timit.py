@@ -594,9 +594,17 @@ def init_params(options):
 
 def build_rev_model(tparams, options, x, y, x_mask):
     # for the backward rnn, we just need to invert x and x_mask
-    xr = x[::-1]
-    yr = y[::-1]
-    xr_mask = x_mask[::-1]
+    # concatenate first x and all targets y
+    # x = [x1, x2, x3]
+    # y = [x2, x3, x4]
+    xc = tensor.concatenate([x[:1, :, :], y], axis=0)
+    # xc = [x1, x2, x3, x4]
+    xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
+    # xc_mask = [1, 1, 1, 0]
+    # xr = [x4, x3, x2, x1]
+    xr = xc[::-1]
+    # xr_mask = [0, 1, 1, 1]
+    xr_mask = xc_mask[::-1]
 
     xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
@@ -605,14 +613,23 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    out_mu = T.clip(out_mu, -8., 8.)
-    out_logvar = T.clip(out_logvar, -8., 8.)
 
+    # shift mus for prediction [o4, o3, o2]
+    # targets are [x3, x2, x1]
+    out_mu = out_mu[:-1]
+    out_logvar = out_logvar[:-1]
+    targets = xr[1:]
+    targets_mask = xr_mask[1:]
+    # states_rev = [s4, s3, s2, s1]
+    states_rev = states_rev[1:]   # cut first state out (last prediction)
+    # states_rev = [s3, s2, s1]   # for the posterior
     # ...
-    log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
+    assert xr_mask.ndim == 2
+    assert xr.ndim == 3
+    log_p_y = log_prob_gaussian(targets, mean=out_mu, log_var=out_logvar)
     log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     nll_rev = -log_p_y                    # NLL
-    nll_rev = (nll_rev * xr_mask).sum(0)
+    nll_rev = (nll_rev * targets_mask).sum(0)
     return nll_rev, states_rev[::-1], updates_rev
 
 
