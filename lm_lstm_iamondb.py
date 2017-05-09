@@ -565,7 +565,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # y = [x2, x3, x4]
     xc = tensor.concatenate([x[:1, :, :], y], axis=0)
     # xc = [x1, x2, x3, x4]
-	x1_mask = tensor.alloc(0, 1, x_mask.shape[1])  # Assume x1 is "start of sentence" token.
+    x1_mask = tensor.alloc(0, 1, x_mask.shape[1])  # Assume x1 is "start of sentence" token.
     xc_mask = tensor.concatenate([x1_mask, x_mask], axis=0)
     # xc_mask = [1, 1, 1, 0]
     # xr = [x4, x3, x2, x1]
@@ -600,8 +600,8 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # targets are [x3, x2, x1]
     out_mu = out_mu[:-1]
     out_logvar = out_logvar[:-1]
-	corr = corr[:-1]
-	binary = binary[:-1]
+    corr = corr[:-1]
+    binary = binary[:-1]
 
     targets = xr[1:]
     targets_mask = xr_mask[1:]
