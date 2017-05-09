@@ -656,12 +656,16 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     rvals = []
     n_done = 0
 
-    next_batch = (lambda: data.get_valid_batch()) \
-        if source == 'valid' else (lambda: data.get_test_batch())
-    for x, y, x_mask in next_batch():
-        x = x.transpose(1, 0, 2)
-        y = y.transpose(1, 0, 2)
-        x_mask = x_mask.transpose(1, 0)
+    #next_batch = (lambda: data.get_valid_batch()) \
+    #    if source == 'valid' else (lambda: data.get_test_batch())
+    #for x, y, x_mask in next_batch():
+        #x = x.transpose(1, 0, 2)
+        #y = y.transpose(1, 0, 2)
+        #x_mask = x_mask.transpose(1, 0)
+    for data_ in data:
+        x = data_[0][0]
+        y = data_[1][0]
+        x_mask = np.ones((x.shape[0], x.shape[1]), dtype='float32')
         n_done += x.shape[1]
 
         zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(
@@ -736,7 +740,7 @@ def train(dim_input=200,  # input vector dimensionality
     pkl.dump(model_options, open(opts, 'wb'))
     log_file = open(desc, 'w')
 
-    data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
+    #data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
 
     x_dim = 200
     data_path = '/data/lisatmp3/chungjun/data/blizzard_unseg/'
@@ -761,9 +765,9 @@ def train(dim_input=200,  # input vector dimensionality
                                 file_name=file_name,
                                 X_mean=X_mean,
                                 X_std=X_std)
-    data=Iterator(train_data, batch_size, start=0, end=2040064)
+    train_d_ = Iterator(train_data, batch_size, start=0, end=2040064)
 
-
+    valid_d_ = Iterator(valid_data, batch_size, start=2040064, end=2152704)
     print('Building model')
     params = init_params(model_options)
     tparams = init_tparams(params)
@@ -834,8 +838,8 @@ def train(dim_input=200,  # input vector dimensionality
 
         #for x, y, x_mask in data.get_train_batch():
         for data_ in train_data:
-            x = data[0][0]
-            y = data[1][0]
+            x = data_[0][0]
+            y = data_[1][0]
             x_mask = np.ones((x.shape[0], x.shape[1]), dtype='float32')
             # Transpose data to have the time steps on dimension 0.
             #x = x.transpose(1, 0, 2)
@@ -881,8 +885,8 @@ def train(dim_input=200,  # input vector dimensionality
             lrate = lrate / 2.0
 
         print 'Starting validation...'
-        valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
-        test_err = pred_probs(f_log_probs, model_options, data, source='test')
+        valid_err = pred_probs(f_log_probs, model_options, valid_d_, source='valid')
+        test_err = pred_probs(f_log_probs, model_options, valid_d_, source='test')
         history_errs.append(valid_err)
         str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
         print(str1)
@@ -893,8 +897,8 @@ def train(dim_input=200,  # input vector dimensionality
             print('Finishing after %d iterations!' % uidx)
             break
 
-    valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
-    test_err = pred_probs(f_log_probs, model_options, data, source='test')
+    valid_err = pred_probs(f_log_probs, model_options, valid_d_, source='valid')
+    test_err = pred_probs(f_log_probs, model_options, valid_d_, source='test')
     str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
     print(str1)
     log_file.write(str1 + '\n')
