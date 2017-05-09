@@ -10,7 +10,7 @@ import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import cPickle as pkl
-from ipdb import set_trace as dbg
+import ipdb
 import numpy
 import copy
 
@@ -24,7 +24,6 @@ from collections import OrderedDict
 profile = False
 seed = 1234
 numpy.random.seed(seed)
-
 
 def gradient_clipping(grads, tparams, clip_c=1.0):
     g2 = 0.
@@ -440,8 +439,8 @@ def latent_lstm_layer(
         z_mus = tensor.dot(p_z, z_mus_w) + z_mus_b
         z_dim = z_mus.shape[-1] / 2
         z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
-        z_mu = T.clip(z_mu, -8., 8.)
-        z_sigma = T.clip(z_sigma, -8., 8.)
+        # z_mu = T.clip(z_mu, -8., 8.)
+        # z_sigma = T.clip(z_sigma, -8., 8.)
 
         if d_ is not None:
             encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
@@ -453,8 +452,8 @@ def latent_lstm_layer(
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
-            decoder_mu = T.clip(decoder_mu, -8., 8.)
-            decoder_sigma = T.clip(decoder_sigma, -8., 8.)
+            decoder_mu = T.clip(decoder_mu, -10., 10.)
+            decoder_sigma = T.clip(decoder_sigma, -10., 10.)
             disc_d_ = theano.gradient.disconnected_grad(d_)
             recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
             recon_cost = tensor.sum(recon_cost, axis=-1)
@@ -561,10 +560,18 @@ def init_params(options):
 
 def build_rev_model(tparams, options, x, y, x_mask):
     # for the backward rnn, we just need to invert x and x_mask
-    xr = x[::-1]
-    yr = y[::-1]
-    xr_mask = x_mask[::-1]
-
+    # concatenate first x and all targets y
+    # x = [x1, x2, x3]
+    # y = [x2, x3, x4]
+    xc = tensor.concatenate([x[:1, :, :], y], axis=0)
+    # xc = [x1, x2, x3, x4]
+	x1_mask = tensor.alloc(0, 1, x_mask.shape[1])  # Assume x1 is "start of sentence" token.
+    xc_mask = tensor.concatenate([x1_mask, x_mask], axis=0)
+    # xc_mask = [1, 1, 1, 0]
+    # xr = [x4, x3, x2, x1]
+    xr = xc[::-1]
+    # xr_mask = [0, 1, 1, 1]
+    xr_mask = xc_mask[::-1]
 
     xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
@@ -584,10 +591,27 @@ def build_rev_model(tparams, options, x, y, x_mask):
 
     # Get parameters for the output distribution.
     out_r = get_layer('ff')[1](tparams, out, options, prefix='ff_out_r', activ='linear')
-    out_mu = T.clip(_slice(out_r, 'mu'), -8., 8.)
-    out_logvar = T.clip(_slice(out_r, 'logvar'), -8., 8.)
+    out_mu = T.clip(_slice(out_r, 'mu'), -10., 10.)
+    out_logvar = T.clip(_slice(out_r, 'logvar'), -10., 10.)
     corr = T.tanh(_slice(out_r, 'corr'))
     binary = T.nnet.sigmoid(_slice(out_r, 'binary'))
+
+    # shift parameters of the output distribution [o4, o3, o2]
+    # targets are [x3, x2, x1]
+    out_mu = out_mu[:-1]
+    out_logvar = out_logvar[:-1]
+	corr = corr[:-1]
+	binary = binary[:-1]
+
+    targets = xr[1:]
+    targets_mask = xr_mask[1:]
+    # states_rev = [s4, s3, s2, s1]
+    # cut first state out (info about x4 is in s3)
+    # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
+    states_rev = states_rev[1:][::-1]
+    # ...
+    assert xr_mask.ndim == 2
+    assert xr.ndim == 3
 
     # Copy what they do in VRNN
     x_shape = x.shape
@@ -597,13 +621,13 @@ def build_rev_model(tparams, options, x, y, x_mask):
     binary = binary.reshape((x_shape[0]*x_shape[1], -1))
 
     # ...
-    nll_rev = nll_BiGauss(yr, out_mu, out_logvar, corr, binary)
+    nll_rev = nll_BiGauss(targets, out_mu, out_logvar, corr, binary)
     nll_rev = nll_rev.reshape((x_shape[0], x_shape[1]))
-    #log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
+    #log_p_y = log_prob_gaussian(targets, mean=out_mu, log_var=out_logvar)
     #log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     #nll_rev = -log_p_y                    # NLL
-    nll_rev = (nll_rev * xr_mask).sum(0)
-    return nll_rev, states_rev[::-1], updates_rev
+    nll_rev = (nll_rev * targets_mask).sum(0)
+    return nll_rev, states_rev, updates_rev
 
 
 # build a training model
@@ -810,7 +834,7 @@ def train(dim_input=3,  # input vector dimensionality
           kl_rate=0.0003):
 
     prior_hidden = dim
-    dim_z = 256
+    dim_z = 50  # Like VRNN
     encoder_hidden = dim
     learn_h0 = False
 
@@ -896,7 +920,7 @@ def train(dim_input=3,  # input vector dimensionality
     grads = tensor.grad(tot_cost, itemlist(tparams))
     print('Done')
 
-    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 10.)
+    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 5.)
     # update function
     all_gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
                    for k, p in tparams.iteritems()]
@@ -971,7 +995,7 @@ def train(dim_input=3,  # input vector dimensionality
                 log_file.write(str1 + '\n')
                 log_file.flush()
 
-        if eidx in [10, 50]:
+        if eidx in [10, 20]:
             lrate = lrate / 2.0
 
         print('Starting validation...')
