@@ -550,9 +550,6 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='ff_out_z',
-                                nin=options['dim_z'],
-                                nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
                                 nout=2 * options['dim_input'],
@@ -629,8 +626,7 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out_z = get_layer('ff')[1](tparams, z, options, prefix='ff_out_z', activ='linear')
-    out = lrelu(out_lstm + out_prev + out_z)
+    out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
     out_mu = T.clip(out_mu, -8., 8.)
