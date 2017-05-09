@@ -736,17 +736,17 @@ def adam(lr, tparams, gshared, beta1=0.9, beta2=0.99, e=1e-5):
 # build a sampler
 def build_sampler(tparams, options, trng):
     # x: 1 x 1
-    last_y = tensor.matrix('last_step', dtype='float32')
+    last_point = tensor.matrix('last_step', dtype='float32')
     init_state = tensor.matrix('init_state', dtype='float32')
     init_memory = tensor.matrix('init_memory', dtype='float32')
     gaussian_sampled = tensor.matrix('gaussian', dtype='float32')
 
     # if it's the first word, emb should be all zero
-    last_y = tensor.switch(last_y[:, 0] < 0,
+    last_point = tensor.switch(last_point[:, 0] < 0,
                            tensor.alloc(0., 1, options["dim_input"]),
-                           last_y)
+                           last_point)
 
-    emb = get_layer('ff')[1](tparams, last_y, options, prefix='ff_in_lstm', activ='lrelu')
+    emb = get_layer('ff')[1](tparams, last_point, options, prefix='ff_in_lstm', activ='lrelu')
 
     # apply one step of gru layer
     rvals, update_gen = get_layer('latent_lstm')[1](tparams, emb, options,
@@ -763,17 +763,51 @@ def build_sampler(tparams, options, trng):
     out_lstm = get_layer('ff')[1](tparams, next_state, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, emb, options, prefix='ff_out_prev', activ='linear')
     out = lrelu(out_lstm + out_prev)
-    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mu, out_logvar = out_mus[:, :options['dim_input']], out_mus[:, options['dim_input']:]
-    out_mu = T.clip(out_mu, -8., 8.)
-    out_logvar = T.clip(out_logvar, -8., 8.)
 
-    next_samples = trng.normal(size=out_mu.shape, avg=out_mu, std=T.sqrt(T.exp(out_logvar)))
-    next_probs = T.sum(log_prob_gaussian(next_samples, mean=out_mu, log_var=out_logvar), axis=1)
+    def _slice(arr, idx):
+        if idx == 'mu':
+          return arr[:, :, :2]
+        elif idx == 'logvar':
+          return arr[:, :, 2:4]
+        elif idx == 'corr':
+          return arr[:, :, [-2]]
+        elif idx == 'binary':
+          return arr[:, :, [-1]]
+
+    # Get parameters for the output distribution.
+    ff_out = get_layer('ff')[1](tparams, out, options, prefix='ff_out', activ='linear')
+    mus = T.clip(_slice(ff_out, 'mu'), -8., 8.)
+    logvars = T.clip(_slice(ff_out, 'logvar'), -8., 8.)
+    corr = T.tanh(_slice(ff_out, 'corr'))
+    binary = T.nnet.sigmoid(_slice(ff_out, 'binary'))
+
+    # Sample from a mixture of two bivariate gaussians.
+    batch_size = mus.shape[0]
+    z1 = trng.normal(size=batch_size)
+    z2 = trng.normal(size=batch_size)
+
+    mu1, mu2 = mus[:, 0], mus[:, 1]
+    sigmas = T.exp(0.5 * logvars)
+    s1, s2 = sigmas[:, 0], sigmas[:, 1]
+
+    x = mu1 + s1 * z1
+    y = mu2 + s2 * (z1*corr + z2 * T.sqrt(1 - corr**2))
+    o = binary > 0.5  # Pen's up
+
+    next_samples = T.concatenate([o, x, y], axis=1)
+
+    # Evaluate the NLL of the samples
+    # Copy the reshaping they do in VRNN before computing NLL.
+    x_shape = x.shape
+    mus = mus.reshape((x_shape[0]*x_shape[1], -1))
+    logvars = logvars.reshape((x_shape[0]*x_shape[1], -1))
+    corr = corr.reshape((x_shape[0]*x_shape[1], -1))
+    binary = binary.reshape((x_shape[0]*x_shape[1], -1))
+    next_probs = T.sum(log_prob_gaussian(next_samples, mean=mus, log_var=logvars), axis=1)
 
     # next word probability
     print('Building f_next..',)
-    inps = [last_y, init_state, init_memory, gaussian_sampled]
+    inps = [last_point, init_state, init_memory, gaussian_sampled]
     outs = [next_probs, next_samples, next_state, next_memory]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print('Done')
