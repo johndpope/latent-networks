@@ -13,8 +13,79 @@ logit_np = lambda u: np.log(u / (1.-u)).astype(theano.config.floatX)
 
 import numpy
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+from numpy.lib.stride_tricks import as_strided
 
 srng = RandomStreams(seed=4884)
+def totuple(arg):
+    if type(arg) is not tuple:
+        if isinstance(arg, list):
+            return tuple(arg)
+        else:
+            return (arg,)
+    return arg
+class Iterator(object):
+    """
+    Dataset iterator
+    Parameters
+    ----------
+    .. todo::
+    """
+    def __init__(self, data, batch_size=None, nbatch=None,
+                 start=0, end=None, shuffle=False, infinite_data=0,
+                 pseudo_n=1000000):
+        if (batch_size or nbatch) is None:
+            raise ValueError("Either batch_size or nbatch should be given.")
+        if (batch_size and nbatch) is not None:
+            raise ValueError("Provide either batch_size or nbatch.")
+        self.infinite_data = infinite_data
+        if not infinite_data:
+            self.start = start
+            self.end = data.num_examples() if end is None else end
+            if self.start >= self.end or self.start < 0:
+                raise ValueError("Got wrong value for start %d." % self.start)
+            self.nexp = self.end - self.start
+            if nbatch is not None:
+                self.batch_size = int(np.float(self.nexp / float(nbatch)))
+                self.nbatch = nbatch
+            elif batch_size is not None:
+                self.batch_size = batch_size
+                self.nbatch = int(np.float(self.nexp / float(batch_size)))
+            self.shuffle = shuffle
+        else:
+            self.pseudo_n = pseudo_n
+        self.data = data
+        self.name = self.data.name
+
+    def __iter__(self):
+        if self.infinite_data:
+            for i in xrange(self.pseudo_n):
+                yield self.data.slices()
+        else:
+            if self.shuffle:
+                self.data.shuffle()
+            start = self.start
+            end = self.end - self.end % self.batch_size
+            for idx in xrange(start, end, self.batch_size):
+                yield [self.data.slices(idx, idx + self.batch_size), self.data.slices(idx + 1, idx + self.batch_size +1)]
+
+
+def complex_to_real(X):
+    """
+    WRITEME
+    Parameters
+    ----------
+    X : list of complex vectors
+    Notes
+    -----
+    This function assumes X as 2D
+    """
+    new_X = []
+    for i in xrange(len(X)):
+        x = X[i]
+        new_x = np.concatenate([np.real(x), np.imag(x)])
+        new_X.append(new_x)
+    return np.array(new_X)
+
 
 def floatX(num):
     if theano.config.floatX == 'float32':
@@ -266,7 +337,107 @@ def create_gaussian_mixture_data_streams(batch_size, monitoring_batch_size,
 
     return main_loop_stream, train_monitor_stream, valid_monitor_stream
 
+def segment_axis(a, length, overlap=0, axis=None, end='cut', endvalue=0):
+    """Generate a new array that chops the given array along the given axis
+    into overlapping frames.
+    This code has been implemented by Anne Archibald and has been discussed
+    on the ML.
+    Parameters
+    ----------
+    a : array-like
+        The array to segment
+    length : int
+        The length of each frame
+    overlap : int, optional
+        The number of array elements by which the frames should overlap
+    axis : int, optional
+        The axis to operate on; if None, act on the flattened array
+    end : {'cut', 'wrap', 'end'}, optional
+        What to do with the last frame, if the array is not evenly
+        divisible into pieces.
+            - 'cut'   Simply discard the extra values
+            - 'wrap'  Copy values from the beginning of the array
+            - 'pad'   Pad with a constant value
+    endvalue : object
+        The value to use for end='pad'
+    Examples
+    --------
+    >>> segment_axis(arange(10), 4, 2)
+    array([[0, 1, 2, 3],
+           [2, 3, 4, 5],
+           [4, 5, 6, 7],
+           [6, 7, 8, 9]])
+    Notes
+    -----
+    The array is not copied unless necessary (either because it is
+    unevenly strided and being flattened or because end is set to
+    'pad' or 'wrap').
+    use as_strided
+    """
 
+    if axis is None:
+        a = np.ravel(a) # may copy
+        axis = 0
+
+    l = a.shape[axis]
+
+    if overlap>=length:
+        raise ValueError, "frames cannot overlap by more than 100%"
+    if overlap<0 or length<=0:
+        raise ValueError, "overlap must be nonnegative and length must be "\
+                          "positive"
+
+    if l<length or (l-length)%(length-overlap):
+        if l>length:
+            roundup = length + \
+                      (1+(l-length)//(length-overlap))*(length-overlap)
+            rounddown = length + \
+                        ((l-length)//(length-overlap))*(length-overlap)
+        else:
+            roundup = length
+            rounddown = 0
+        assert rounddown<l<roundup
+        assert roundup==rounddown+(length-overlap) or \
+               (roundup==length and rounddown==0)
+        a = a.swapaxes(-1,axis)
+
+        if end=='cut':
+            a = a[...,:rounddown]
+        elif end in ['pad','wrap']: # copying will be necessary
+            s = list(a.shape)
+            s[-1]=roundup
+            b = np.empty(s,dtype=a.dtype)
+            b[...,:l] = a
+            if end=='pad':
+                b[...,l:] = endvalue
+            elif end=='wrap':
+                b[...,l:] = a[...,:roundup-l]
+            a = b
+
+        a = a.swapaxes(-1,axis)
+
+
+    l = a.shape[axis]
+    if l==0:
+        raise ValueError, "Not enough data points to segment array in 'cut' "\
+                          "mode; try 'pad' or 'wrap'"
+    assert l>=length
+    assert (l-length)%(length-overlap) == 0
+    n = 1+(l-length)//(length-overlap)
+    s = a.strides[axis]
+    newshape = a.shape[:axis] + (n,length) + a.shape[axis+1:]
+    newstrides = a.strides[:axis] + ((length-overlap)*s, s) + \
+                 a.strides[axis+1:]
+
+    try:
+        return as_strided(a, strides=newstrides, shape=newshape)
+    except TypeError:
+        warnings.warn("Problem with ndarray creation forces copy.")
+        a = a.copy()
+        # Shape doesn't change but strides does
+        newstrides = a.strides[:axis] + ((length-overlap)*s, s) + \
+                     a.strides[axis+1:]
+        return as_strided(a, strides=newstrides, shape=newshape)
 
 def save_params(params, filename, symlink=None):
     """Save the parameters.
