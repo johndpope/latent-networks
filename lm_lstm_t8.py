@@ -562,9 +562,9 @@ def build_rev_model(tparams, options, x, y, x_mask):
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
     out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
-    out = lrelu(out_lstm + out_prev)
+    out = tensor.nnet.tanh(out_lstm + out_prev)
     out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
-    out_mu = masked_softmax(out_mu, axis=1)
+    out_mu = masked_softmax(out_mu, axis=2)
 
     # shift mus for prediction [o4, o3, o2]
     # targets are [x3, x2, x1]
@@ -597,9 +597,9 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out = lrelu(out_lstm + out_prev)
+    out = tensor.nnet.tanh(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mus = masked_softmax(out_mus, axis=1)
+    out_mus = masked_softmax(out_mus, axis=2)
     nll_gen = categorical_crossentropy(y, out_mus)
     nll_gen = (nll_gen * x_mask).sum(0)
     kld = (kld * x_mask).sum(0)
