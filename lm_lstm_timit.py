@@ -475,7 +475,6 @@ def latent_lstm_layer(
         z_mus = tensor.dot(p_z, z_mus_w) + z_mus_b
         z_dim = z_mus.shape[-1] / 2
         z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
-        z_sigma = T.clip(z_sigma, -10., 10.)
 
         if d_ is not None:
             encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
@@ -487,6 +486,7 @@ def latent_lstm_layer(
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
+            decoder_mu = T.clip(decoder_mu, -10., 10.)
             decoder_sigma = T.clip(decoder_sigma, -10., 10.)
             disc_d_ = theano.gradient.disconnected_grad(d_)
             recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
@@ -611,6 +611,9 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
+    # clip reverse prediction
+    out_mu = T.clip(out_mu, -10., 10.)
+    out_logvar = T.clip(out_logvar, -10., 10.)
 
     # shift mus for prediction [o4, o3, o2]
     # targets are [x3, x2, x1]
@@ -649,7 +652,6 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    out_logvar = T.clip(out_logvar, -10., 10.)
 
     # Compute gaussian log prob of target
     log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
