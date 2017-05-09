@@ -30,7 +30,11 @@ def fetch_blizzard(data_path, shuffle=0, sz=32000, file_name="full_blizzard.h5")
 
         # setup tables
         compression_filter = tables.Filters(complevel=5, complib='blosc')
+<<<<<<< HEAD
         hdf5_file = tables.openFile(hdf5_path, mode='w')
+=======
+        hdf5_file = tables.open_file(hdf5_path, mode='w')
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
         data = hdf5_file.createEArray(hdf5_file.root, 'data',
                                       tables.Int16Atom(),
                                       shape=(0, sz),
@@ -72,7 +76,11 @@ def fetch_blizzard(data_path, shuffle=0, sz=32000, file_name="full_blizzard.h5")
 
         hdf5_file.close()
 
+<<<<<<< HEAD
     hdf5_file = tables.openFile(hdf5_path, mode='r')
+=======
+    hdf5_file = tables.open_file(hdf5_path, mode='r')
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
     return hdf5_file.root.data
 
@@ -95,7 +103,11 @@ def fetch_blizzard_tbptt(data_path, sz=8000, batch_size=100, file_name="blizzard
 
         # setup tables
         compression_filter = tables.Filters(complevel=5, complib='blosc')
+<<<<<<< HEAD
         hdf5_file = tables.openFile(hdf5_path, mode='w')
+=======
+        hdf5_file = tables.open_file(hdf5_path, mode='w')
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
         data = hdf5_file.createEArray(hdf5_file.root, 'data',
                                       tables.Int16Atom(),
                                       shape=(0, sz),
@@ -130,7 +142,11 @@ def fetch_blizzard_tbptt(data_path, sz=8000, batch_size=100, file_name="blizzard
 
         hdf5_file.close()
 
+<<<<<<< HEAD
     hdf5_file = tables.openFile(hdf5_path, mode='r')
+=======
+    hdf5_file = tables.open_file(hdf5_path, mode='r')
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
     return hdf5_file.root.data
 

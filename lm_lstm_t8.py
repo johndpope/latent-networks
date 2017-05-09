@@ -8,6 +8,7 @@ import theano
 import theano.tensor as T
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+from t8_data import Text8
 
 import cPickle as pkl
 import ipdb
@@ -25,6 +26,18 @@ profile = False
 seed = 1234
 numpy.random.seed(seed)
 
+
+def masked_softmax(x, axis=-1, mask=None):
+    if mask is not None:
+        x = (mask * x) + (1 - mask) * (-10)
+        x = tensor.clip(x, -10., 10.)
+    e_x = tensor.exp(x - tensor.max(x, axis=axis, keepdims=True))
+    if mask is not None:
+        e_x = e_x * mask
+    softmax = e_x / (tensor.sum(e_x, axis=axis, keepdims=True) + 1e-6)
+    return softmax
+
+
 def gradient_clipping(grads, tparams, clip_c=1.0):
     g2 = 0.
     for g in grads:
@@ -37,6 +50,19 @@ def gradient_clipping(grads, tparams, clip_c=1.0):
         new_grads.append(tensor.switch(
             g2 > clip_c, g * (clip_c / g2), g))
     return new_grads, not_finite, tensor.lt(clip_c, g2)
+
+
+def categorical_crossentropy(target, output):
+    '''
+    Compute categorical cross-entropy between targets and model output.
+    '''
+    assert (target.ndim == 2)
+    assert (output.ndim == 3)
+    output = output.reshape((output.shape[0] * output.shape[1], output.shape[2]))
+    t_flat = target.flatten()
+    probs = tensor.diag(output.T[t_flat])
+    probs = probs.reshape((target.shape[0], target.shape[1]))
+    return -tensor.log(probs + 1e-6)
 
 
 # push parameters to Theano shared variables
@@ -199,77 +225,6 @@ def concatenate(tensor_list, axis=0):
     return out
 
 
-class TimitData():
-    def __init__(self, fn, batch_size):
-        import numpy as np
-        data = np.load(fn)
-
-        ####
-        # IMPORTANT: u_train is the input and x_train is the target.
-        ##
-        u_train, x_train = data['u_train'], data['x_train']
-        u_valid, x_valid = data['u_valid'], data['x_valid']
-        (u_test, x_test, mask_test) = data['u_test'],  data['x_test'], data['mask_test']
-
-        # assert u_test.shape[0] == 1680
-        # assert x_test.shape[0] == 1680
-        # assert mask_test.shape[0] == 1680
-
-        self.u_train = u_train
-        self.x_train = x_train
-        self.u_valid = u_valid
-        self.x_valid = x_valid
-
-        # make multiple of batchsize
-        n_test_padded = ((u_test.shape[0] // batch_size) + 1)*batch_size
-        assert n_test_padded > u_test.shape[0]
-        pad = n_test_padded - u_test.shape[0]
-        u_test = np.pad(u_test, ((0, pad), (0, 0), (0, 0)), mode='constant')
-        x_test = np.pad(x_test, ((0, pad), (0, 0), (0, 0)), mode='constant')
-        mask_test = np.pad(mask_test, ((0, pad), (0, 0)), mode='constant')
-        self.u_test = u_test
-        self.x_test = x_test
-        self.mask_test = mask_test
-
-        self.n_train = u_train.shape[0]
-        self.n_valid = u_valid.shape[0]
-        self.n_test = u_test.shape[0]
-        self.batch_size = batch_size
-
-        print("TRAINING SAMPLES LOADED", self.u_train.shape)
-        print("TEST SAMPLES LOADED", self.u_test.shape)
-        print("VALID SAMPLES LOADED", self.u_valid.shape)
-        print("TEST AVG LEN        ", np.mean(self.mask_test.sum(axis=1)) * 200)
-        # test that x and u are correctly shifted
-        assert np.sum(self.u_train[:, 1:] - self.x_train[:, :-1]) == 0.0
-        assert np.sum(self.u_valid[:, 1:] - self.x_valid[:, :-1]) == 0.0
-        for row in range(self.u_test.shape[0]):
-            l = int(self.mask_test[row].sum())
-            if l > 0:  # if l is zero the sequence is fully padded.
-                assert np.sum(self.u_test[row, 1:l] -
-                              self.x_test[row, :l-1]) == 0.0, row
-
-    def _iter_data(self, u, x, mask=None):
-        # IMPORTANT: In SRNN (where the data come from) u refers to the input whereas x, to the target.
-        indices = range(len(u))
-        for idx in chunk(indices, n=self.batch_size):
-            u_batch, x_batch = u[idx], x[idx]
-            if mask is None:
-                mask_batch = np.ones((x_batch.shape[0], x_batch.shape[1]), dtype='float32')
-            else:
-                mask_batch = mask[idx]
-            yield u_batch, x_batch, mask_batch
-
-    def get_train_batch(self):
-        return iter(self._iter_data(self.u_train, self.x_train))
-
-    def get_valid_batch(self):
-        return iter(self._iter_data(self.u_valid, self.x_valid))
-
-    def get_test_batch(self):
-        return iter(self._iter_data(self.u_test, self.x_test, mask=self.mask_test))
-
-
 # feedforward layer: affine transformation + point-wise nonlinearity
 def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None,
                        ortho=True):
@@ -285,6 +240,8 @@ def param_init_fflayer(options, params, prefix='ff', nin=None, nout=None,
 
 def fflayer(tparams, state_below, options, prefix='rconv',
             activ='lambda x: tensor.tanh(x)', **kwargs):
+    if state_below.dtype == 'int32' or state_below.dtype == 'int64':
+        return tparams[_p(prefix, 'W')][state_below] + tparams[_p(prefix, 'b')]
     return eval(activ)(
         tensor.dot(state_below, tparams[_p(prefix, 'W')]) +
         tparams[_p(prefix, 'b')])
@@ -551,9 +508,12 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='ff_out_z',
+                                nin=options['dim_z'],
+                                nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
-                                nout=2 * options['dim_input'],
+                                nout=options['dim_input'],
                                 ortho=False)
     U = numpy.concatenate([norm_weight(options['dim_z'], options['dim']),
                            norm_weight(options['dim_z'], options['dim']),
@@ -566,9 +526,6 @@ def init_params(options):
                                               nin=options['dim_proj'],
                                               dim=options['dim'])
     # readout
-    params = get_layer('ff')[0](options, params, prefix='ff_in_lstm_r',
-                                nin=options['dim_input'], nout=options['dim_proj'],
-                                ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_lstm_r',
                                 nin=options['dim'], nout=options['dim'],
                                 ortho=False)
@@ -577,7 +534,7 @@ def init_params(options):
                                 nout=options['dim'], ortho=False)
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus_r',
                                 nin=options['dim'],
-                                nout=2 * options['dim_input'],
+                                nout=options['dim_input'],
                                 ortho=False)
     #Prior Network params
     params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
@@ -595,7 +552,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # concatenate first x and all targets y
     # x = [x1, x2, x3]
     # y = [x2, x3, x4]
-    xc = tensor.concatenate([x[:1, :, :], y], axis=0)
+    xc = tensor.concatenate([x[:1, :], y], axis=0)
     # xc = [x1, x2, x3, x4]
     xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
     # xc_mask = [1, 1, 1, 0]
@@ -604,21 +561,17 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # xr_mask = [0, 1, 1, 1]
     xr_mask = xc_mask[::-1]
 
-    xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
+    xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm', activ='lambda x: x')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
     out_lstm = get_layer('ff')[1](tparams, states_rev, options, prefix='ff_out_lstm_r', activ='linear')
     out_prev = get_layer('ff')[1](tparams, xr_emb, options, prefix='ff_out_prev_r', activ='linear')
     out = lrelu(out_lstm + out_prev)
-    out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
-    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    # clip reverse prediction
-    out_mu = T.clip(out_mu, -10., 10.)
-    out_logvar = T.clip(out_logvar, -10., 10.)
+    out_mu = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
+    out_mu = masked_softmax(out_mu, axis=1)
 
     # shift mus for prediction [o4, o3, o2]
     # targets are [x3, x2, x1]
     out_mu = out_mu[:-1]
-    out_logvar = out_logvar[:-1]
     targets = xr[1:]
     targets_mask = xr_mask[1:]
     # states_rev = [s4, s3, s2, s1]
@@ -626,11 +579,9 @@ def build_rev_model(tparams, options, x, y, x_mask):
     # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
     states_rev = states_rev[1:][::-1]
     # ...
+    assert xr.ndim == 2
     assert xr_mask.ndim == 2
-    assert xr.ndim == 3
-    log_p_y = log_prob_gaussian(targets, mean=out_mu, log_var=out_logvar)
-    log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
-    nll_rev = -log_p_y                    # NLL
+    nll_rev = categorical_crossentropy(targets, out_mu)
     nll_rev = (nll_rev * targets_mask).sum(0)
     return nll_rev, states_rev, updates_rev
 
@@ -639,7 +590,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
 def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     opt_ret = dict()
     # disconnecting reconstruction gradient from going in the backward encoder
-    x_emb = get_layer('ff')[1](tparams, x, options, prefix='ff_in_lstm', activ='lrelu')
+    x_emb = get_layer('ff')[1](tparams, x, options, prefix='ff_in_lstm', activ='lambda x: x')
     rvals, updates_gen = get_layer('latent_lstm')[1](
         tparams, state_below=x_emb, options=options,
         prefix='encoder', mask=x_mask, gaussian_s=zmuv,
@@ -649,14 +600,11 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
-    out = lrelu(out_lstm + out_prev)
+    out_z = get_layer('ff')[1](tparams, z, options, prefix='ff_out_z', activ='linear')
+    out = lrelu(out_lstm + out_prev + out_z)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
-    out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-
-    # Compute gaussian log prob of target
-    log_p_y = log_prob_gaussian(y, mean=out_mu, log_var=out_logvar)
-    log_p_y = T.sum(log_p_y, axis=-1)  # Sum over output dim.
-    nll_gen = -log_p_y  # NLL
+    out_mus = masked_softmax(out_mus, axis=1)
+    nll_gen = categorical_crossentropy(y, out_mus)
     nll_gen = (nll_gen * x_mask).sum(0)
     kld = (kld * x_mask).sum(0)
     rec_cost_rev = (rec_cost_rev * x_mask).sum(0)
@@ -676,8 +624,8 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     next_batch = (lambda: data.get_valid_batch()) \
         if source == 'valid' else (lambda: data.get_test_batch())
     for x, y, x_mask in next_batch():
-        x = x.transpose(1, 0, 2)
-        y = y.transpose(1, 0, 2)
+        x = x.transpose(1, 0)
+        y = y.transpose(1, 0)
         x_mask = x_mask.transpose(1, 0)
         n_done += x.shape[1]
 
@@ -739,12 +687,14 @@ def train(dim_input=200,  # input vector dimensionality
           kl_rate=0.0003):
 
     prior_hidden = dim
-    dim_z = 256
+    dim_z = 100
     encoder_hidden = dim
     learn_h0 = False
 
-    desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
-    opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' + \
+        str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' + \
+        str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
 
     print(desc)
 
@@ -753,14 +703,14 @@ def train(dim_input=200,  # input vector dimensionality
     pkl.dump(model_options, open(opts, 'wb'))
     log_file = open(desc, 'w')
 
-    data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
+    data = Text8("./t8/data", 35, batch_size=model_options['batch_size'])
 
     print('Building model')
     params = init_params(model_options)
     tparams = init_tparams(params)
 
-    x = tensor.tensor3('x')
-    y = tensor.tensor3('y')
+    x = tensor.lmatrix('x')
+    y = tensor.lmatrix('y')
     x_mask = tensor.matrix('x_mask')
     zmuv = tensor.tensor3('zmuv')
     weight_f = tensor.scalar('weight_f')
@@ -825,9 +775,9 @@ def train(dim_input=200,  # input vector dimensionality
 
         for x, y, x_mask in data.get_train_batch():
             # Transpose data to have the time steps on dimension 0.
-            x = x.transpose(1, 0, 2)
-            y = y.transpose(1, 0, 2)
-            x_mask = x_mask.transpose(1, 0)
+            x = x.transpose(1, 0).astype('int32')
+            y = y.transpose(1, 0).astype('int32')
+            x_mask = x_mask.transpose(1, 0).astype('float32')
 
             n_samples += x.shape[1]
             uidx += 1
@@ -837,7 +787,8 @@ def train(dim_input=200,  # input vector dimensionality
             ud_start = time.time()
             # compute cost, grads and copy grads to shared variables
             zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], x.shape[1], model_options['dim_z'])).astype('float32')
-            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np, not_finite_np = \
+            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, \
+                elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np, not_finite_np = \
                 f_prop(x, y, x_mask, zmuv, np.float32(kl_start))
             if numpy.isnan(tot_cost_np) or numpy.isinf(tot_cost_np) or not_finite_np:
                 print('Nan cost... skipping')

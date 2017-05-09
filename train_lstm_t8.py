@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 import os
-from lm_lstm_timit import train
+from lm_lstm_t8 import train
 
 def main(job_id, params):
     print(params)
@@ -31,15 +31,15 @@ def main(job_id, params):
 if __name__ == '__main__':
     try:
         # Created experiments folder, if needed.
-        os.makedirs("./experiments/timit/")
+        os.makedirs("./experiments/t8/")
     except:
         pass
 
     main(0, {
-        'model': ['./experiments/timit/'],
-        'dim_input': [200],
-        'dim': [2000],
-        'dim_proj': [600],
+        'model': ['./experiments/t8/'],
+        'dim_input': [44372],
+        'dim': [500],
+        'dim_proj': [300],
         'optimizer': ['adam'],
         'decay-c': [0.],
         'kl_start': [0.2],

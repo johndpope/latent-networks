@@ -485,8 +485,13 @@ def latent_lstm_layer(
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
+<<<<<<< HEAD
             decoder_mu = T.clip(decoder_mu, -8., 8.)
             decoder_sigma = T.clip(decoder_sigma, -8., 8.)
+=======
+            decoder_mu = T.clip(decoder_mu, -10., 10.)
+            decoder_sigma = T.clip(decoder_sigma, -10., 10.)
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
             disc_d_ = theano.gradient.disconnected_grad(d_)
             recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
             recon_cost = tensor.sum(recon_cost, axis=-1)
@@ -550,9 +555,12 @@ def init_params(options):
     params = get_layer('ff')[0](options, params, prefix='ff_out_prev',
                                 nin=options['dim_proj'],
                                 nout=options['dim'], ortho=False)
+<<<<<<< HEAD
     params = get_layer('ff')[0](options, params, prefix='ff_out_z',
                                 nin=options['dim_z'],
                                 nout=options['dim'], ortho=False)
+=======
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     params = get_layer('ff')[0](options, params, prefix='ff_out_mus',
                                 nin=options['dim'],
                                 nout=2 * options['dim_input'],
@@ -594,9 +602,23 @@ def init_params(options):
 
 def build_rev_model(tparams, options, x, y, x_mask):
     # for the backward rnn, we just need to invert x and x_mask
+<<<<<<< HEAD
     xr = x[::-1]
     yr = y[::-1]
     xr_mask = x_mask[::-1]
+=======
+    # concatenate first x and all targets y
+    # x = [x1, x2, x3]
+    # y = [x2, x3, x4]
+    xc = tensor.concatenate([x[:1, :, :], y], axis=0)
+    # xc = [x1, x2, x3, x4]
+    xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
+    # xc_mask = [1, 1, 1, 0]
+    # xr = [x4, x3, x2, x1]
+    xr = xc[::-1]
+    # xr_mask = [0, 1, 1, 1]
+    xr_mask = xc_mask[::-1]
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
     xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
@@ -605,6 +627,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
+<<<<<<< HEAD
     out_mu = T.clip(out_mu, -8., 8.)
     out_logvar = T.clip(out_logvar, -8., 8.)
 
@@ -614,6 +637,30 @@ def build_rev_model(tparams, options, x, y, x_mask):
     nll_rev = -log_p_y                    # NLL
     nll_rev = (nll_rev * xr_mask).sum(0)
     return nll_rev, states_rev[::-1], updates_rev
+=======
+    # clip reverse prediction
+    out_mu = T.clip(out_mu, -10., 10.)
+    out_logvar = T.clip(out_logvar, -10., 10.)
+
+    # shift mus for prediction [o4, o3, o2]
+    # targets are [x3, x2, x1]
+    out_mu = out_mu[:-1]
+    out_logvar = out_logvar[:-1]
+    targets = xr[1:]
+    targets_mask = xr_mask[1:]
+    # states_rev = [s4, s3, s2, s1]
+    # cut first state out (info about x4 is in s3)
+    # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
+    states_rev = states_rev[1:][::-1]
+    # ...
+    assert xr_mask.ndim == 2
+    assert xr.ndim == 3
+    log_p_y = log_prob_gaussian(targets, mean=out_mu, log_var=out_logvar)
+    log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
+    nll_rev = -log_p_y                    # NLL
+    nll_rev = (nll_rev * targets_mask).sum(0)
+    return nll_rev, states_rev, updates_rev
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
 
 # build a training model
@@ -629,8 +676,12 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
+<<<<<<< HEAD
     out_z = get_layer('ff')[1](tparams, z, options, prefix='ff_out_z', activ='linear')
     out = lrelu(out_lstm + out_prev + out_z)
+=======
+    out = lrelu(out_lstm + out_prev)
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
     out_mu = T.clip(out_mu, -8., 8.)
@@ -656,12 +707,15 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     rvals = []
     n_done = 0
 
+<<<<<<< HEAD
     #next_batch = (lambda: data.get_valid_batch()) \
     #    if source == 'valid' else (lambda: data.get_test_batch())
     #for x, y, x_mask in next_batch():
         #x = x.transpose(1, 0, 2)
         #y = y.transpose(1, 0, 2)
         #x_mask = x_mask.transpose(1, 0)
+=======
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     for data_ in data:
         x = data_[0][0]
         y = data_[1][0]
@@ -732,6 +786,10 @@ def train(dim_input=200,  # input vector dimensionality
 
     desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
     opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+<<<<<<< HEAD
+=======
+    model_file = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
     print(desc)
 
@@ -740,6 +798,7 @@ def train(dim_input=200,  # input vector dimensionality
     pkl.dump(model_options, open(opts, 'wb'))
     log_file = open(desc, 'w')
 
+<<<<<<< HEAD
     #data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
 
     x_dim = 200
@@ -749,6 +808,13 @@ def train(dim_input=200,  # input vector dimensionality
 
 
 
+=======
+
+    x_dim = 200
+    data_path = '/scratch/macote/blizzard_unseg/'
+    file_name = 'blizzard_unseg_tbptt'
+
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     normal_params = np.load(data_path + file_name + '_normal.npz')
     X_mean = normal_params['X_mean']
     X_std = normal_params['X_std']
@@ -765,6 +831,10 @@ def train(dim_input=200,  # input vector dimensionality
                                 file_name=file_name,
                                 X_mean=X_mean,
                                 X_std=X_std)
+<<<<<<< HEAD
+=======
+
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     train_d_ = Iterator(train_data, batch_size, start=0, end=2040064)
     valid_d_ = Iterator(valid_data, batch_size, start=2040064, end=2152704)
     print('Building model')
@@ -803,7 +873,11 @@ def train(dim_input=200,  # input vector dimensionality
     grads = tensor.grad(tot_cost, itemlist(tparams))
     print('Done')
 
+<<<<<<< HEAD
     all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 10.)
+=======
+    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 5.)
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
     # update function
     all_gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
                    for k, p in tparams.iteritems()]
@@ -835,15 +909,21 @@ def train(dim_input=200,  # input vector dimensionality
         n_samples = 0
         tr_costs = [[], [], [], [], [], [], []]
 
+<<<<<<< HEAD
         #for x, y, x_mask in data.get_train_batch():
+=======
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
         for data_ in train_d_:
             x = data_[0][0]
             y = data_[1][0]
             x_mask = np.ones((x.shape[0], x.shape[1]), dtype='float32')
+<<<<<<< HEAD
             # Transpose data to have the time steps on dimension 0.
             #x = x.transpose(1, 0, 2)
             #y = y.transpose(1, 0, 2)
             #x_mask = x_mask.transpose(1, 0)
+=======
+>>>>>>> 2cedae0253b87dec5dcb6e39d36bf2d811884420
 
             n_samples += x.shape[1]
             uidx += 1
