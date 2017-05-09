@@ -619,8 +619,9 @@ def build_rev_model(tparams, options, x, y, x_mask):
     targets = xr[1:]
     targets_mask = xr_mask[1:]
     # states_rev = [s4, s3, s2, s1]
-    states_rev = states_rev[1:]   # cut first state out (last prediction)
-    # states_rev = [s3, s2, s1]   # for the posterior
+    # cut first state out (info about x4 is in s3)
+    # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
+    states_rev = states_rev[1:][::-1]
     # ...
     assert xr_mask.ndim == 2
     assert xr.ndim == 3
@@ -628,7 +629,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     nll_rev = -log_p_y                    # NLL
     nll_rev = (nll_rev * targets_mask).sum(0)
-    return nll_rev, states_rev[::-1], updates_rev
+    return nll_rev, states_rev, updates_rev
 
 
 # build a training model
