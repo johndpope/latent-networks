@@ -449,3 +449,23 @@ def save_params(params, filename, symlink=None):
         if os.path.lexists(symlink):
             os.remove(symlink)
         os.symlink(filename, symlink)
+
+
+def tolist(arg):
+    if type(arg) is not list:
+        if isinstance(arg, tuple):
+            return list(arg)
+        else:
+            return [arg]
+    return arg
+
+
+def totuple(arg):
+    if type(arg) is not tuple:
+        if isinstance(arg, list):
+            return tuple(arg)
+        else:
+            return (arg,)
+    return arg
+
+

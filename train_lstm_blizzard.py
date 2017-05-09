@@ -14,7 +14,7 @@ def main(job_id, params):
         lrate=params['learning-rate'][0],
         optimizer=params['optimizer'][0],
         dim_proj=params['dim_proj'][0],
-        batch_size=32,
+        batch_size=128,
         valid_batch_size=32,
         dispFreq=10,
         saveFreq=1000,
@@ -23,22 +23,23 @@ def main(job_id, params):
         valid_dataset=None,
         dictionary=None,
         use_dropout=params['use-dropout'][0],
-        kl_start=1.0,
-        kl_rate=0.00005)
+        kl_start=0.2,
+        kl_rate=0.00005,
+        weight_aux=0.01)
     return validerr
 
 if __name__ == '__main__':
     try:
         # Created experiments folder, if needed.
-        os.makedirs("./experiments/timit/")
+        os.makedirs("./experiments/blizzard/")
     except:
         pass
 
     main(0, {
-        'model': ['./experiments/timit/'],
+        'model': ['./experiments/blizzard/'],
         'dim_input': [200],
-        'dim': [2000],
-        'dim_proj': [600],
+        'dim': [2048],
+        'dim_proj': [800],
         'optimizer': ['adam'],
         'decay-c': [0.],
         'use-dropout': [False],

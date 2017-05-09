@@ -732,6 +732,7 @@ def train(dim_input=200,  # input vector dimensionality
 
     desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
     opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
+    model_file = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
 
     print(desc)
 
@@ -743,7 +744,7 @@ def train(dim_input=200,  # input vector dimensionality
     #data = TimitData("timit_raw_batchsize64_seqlen40.npz", batch_size=model_options['batch_size'])
 
     x_dim = 200
-    data_path = '/data/lisatmp3/chungjun/data/blizzard_unseg/'
+    data_path = '/scratch/macote/blizzard_unseg/'
     file_name = 'blizzard_unseg_tbptt'
 
 
