@@ -10,9 +10,10 @@ import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
 import cPickle as pkl
-import ipdb
+from ipdb import set_trace as dbg
 import numpy
 import copy
+import sys
 
 import warnings
 import time
@@ -740,10 +741,14 @@ def build_sampler(tparams, options, trng):
     init_state = tensor.matrix('init_state', dtype='float32')
     init_memory = tensor.matrix('init_memory', dtype='float32')
     gaussian_sampled = tensor.matrix('gaussian', dtype='float32')
+    # last_point.tag.test_value = -1 * np.ones((2, 3), dtype="float32")
+    # init_state.tag.test_value = np.zeros((2, options['dim']), dtype="float32")
+    # init_memory.tag.test_value = np.zeros((2, options['dim']), dtype="float32")
+    # gaussian_sampled.tag.test_value = np.random.randn(2, 256).astype("float32")
 
     # if it's the first word, emb should be all zero
-    last_point = tensor.switch(last_point[:, 0] < 0,
-                           tensor.alloc(0., 1, options["dim_input"]),
+    last_point = tensor.switch(last_point[:, [0]] < 0,
+                           tensor.alloc(0., last_point.shape[0], options["dim_input"]),
                            last_point)
 
     emb = get_layer('ff')[1](tparams, last_point, options, prefix='ff_in_lstm', activ='lrelu')
@@ -766,13 +771,13 @@ def build_sampler(tparams, options, trng):
 
     def _slice(arr, idx):
         if idx == 'mu':
-          return arr[:, :, :2]
+          return arr[:, :2]
         elif idx == 'logvar':
-          return arr[:, :, 2:4]
+          return arr[:, 2:4]
         elif idx == 'corr':
-          return arr[:, :, [-2]]
+          return arr[:, -2]
         elif idx == 'binary':
-          return arr[:, :, [-1]]
+          return arr[:, -1]
 
     # Get parameters for the output distribution.
     ff_out = get_layer('ff')[1](tparams, out, options, prefix='ff_out', activ='linear')
@@ -782,33 +787,35 @@ def build_sampler(tparams, options, trng):
     binary = T.nnet.sigmoid(_slice(ff_out, 'binary'))
 
     # Sample from a mixture of two bivariate gaussians.
-    batch_size = mus.shape[0]
-    z1 = trng.normal(size=batch_size)
-    z2 = trng.normal(size=batch_size)
+    zs = trng.normal(size=mus.shape)
+    z1, z2 = zs[:, 0], zs[:, 1]
 
     mu1, mu2 = mus[:, 0], mus[:, 1]
     sigmas = T.exp(0.5 * logvars)
     s1, s2 = sigmas[:, 0], sigmas[:, 1]
 
     x = mu1 + s1 * z1
-    y = mu2 + s2 * (z1*corr + z2 * T.sqrt(1 - corr**2))
-    o = binary > 0.5  # Pen's up
+    y = mu2 + s2 * (z1*corr + z2*T.sqrt(1 - corr**2))
+
+    u = trng.uniform(size=binary.shape)
+    o = u < binary  # Pen's up
 
     next_samples = T.concatenate([o, x, y], axis=1)
 
     # Evaluate the NLL of the samples
     # Copy the reshaping they do in VRNN before computing NLL.
-    x_shape = x.shape
-    mus = mus.reshape((x_shape[0]*x_shape[1], -1))
-    logvars = logvars.reshape((x_shape[0]*x_shape[1], -1))
-    corr = corr.reshape((x_shape[0]*x_shape[1], -1))
-    binary = binary.reshape((x_shape[0]*x_shape[1], -1))
-    next_probs = T.sum(log_prob_gaussian(next_samples, mean=mus, log_var=logvars), axis=1)
+    # x_shape = x.shape
+    # mus = mus.reshape((x_shape[0]*x_shape[1], -1))
+    # logvars = logvars.reshape((x_shape[0]*x_shape[1], -1))
+    # corr = corr.reshape((x_shape[0]*x_shape[1], -1))
+    # binary = binary.reshape((x_shape[0]*x_shape[1], -1))
+    # next_probs = T.sum(log_prob_gaussian(next_samples, mean=mus, log_var=logvars), axis=1)
+    next_ln_p = nll_BiGauss(next_samples[None, :, :], mus, logvars, corr, binary)
 
     # next word probability
     print('Building f_next..',)
     inps = [last_point, init_state, init_memory, gaussian_sampled]
-    outs = [next_probs, next_samples, next_state, next_memory]
+    outs = [next_ln_p, next_samples, next_state, next_memory]
     f_next = theano.function(inps, outs, name='f_next', profile=profile)
     print('Done')
 
@@ -832,12 +839,12 @@ def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
 
         inps = [next_s, next_state, next_memory, zmuv]
         ret = f_next(*inps)
-        next_p, next_s, next_state, next_memory = ret
+        next_ln_p, next_s, next_state, next_memory = ret
 
         sample.append(next_s)
-        sample_score += next_p
+        sample_score += next_ln_p
 
-    return sample, sample_score
+    return np.stack(sample, axis=1), sample_score
 
 
 def train(dim_input=3,  # input vector dimensionality
@@ -905,16 +912,7 @@ def train(dim_input=3,  # input vector dimensionality
     # reload parameters
     if reload_ and os.path.isfile(model_file):
         params = load_params(model_file, params)
-        trng = RandomStreams(42)
-        f_next = build_sampler(tparams, model_options, trng)
-        sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=200, argmax=False)
-        dbg()
-
-        from iamondb_utils import plot_lines_iamondb_example
-        # Un-normlize data
-        sample = iamondb.X_mean + sample * iamondb.X_std
-        plot_lines_iamondb_example(sample, show=True)
-        dbg()
+        tparams = init_tparams(params)
 
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
@@ -949,6 +947,26 @@ def train(dim_input=3,  # input vector dimensionality
         inps[:-1], ELBOcost(nll_gen, kld, kld_weight=1.),
         updates=(updates_gen + updates_rev), profile=profile)
     print('Done')
+
+
+    # reload parameters
+    if True:#reload_ and os.path.isfile(model_file):
+        valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, batch_size, source='valid')
+        print("Valid: {}".format(valid_err))
+
+        trng = RandomStreams(42)
+        f_next = build_sampler(tparams, model_options, trng)
+        normalized_sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=200, argmax=False)
+
+        from iamondb_utils import plot_lines_iamondb_example
+        # Un-normlize data
+        sample = iamondb.X_mean + normalized_sample * iamondb.X_std
+        sample[:, :, 0] = normalized_sample[:, :, 0]
+        print(sample_score)
+        plot_lines_iamondb_example(sample[0], show=True)
+        from ipdb import set_trace; set_trace()
+        sys.exit()
+
 
     print('Computing gradient...')
     grads = tensor.grad(tot_cost, itemlist(tparams))
