@@ -582,10 +582,10 @@ def init_params(options):
 
 
 def build_rev_model(tparams, options, x, y, x_mask):
-    xc = tensor.concatenate([x[:1, :], y], axis=0)
-    xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
-    xr = xc[::-1]
-    xr_mask = xc_mask[::-1]
+    #xc = tensor.concatenate([x[:1, :], y], axis=0)
+    #xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
+    xr = x[::-1]
+    xr_mask = x_mask[::-1]
     n_timesteps = x.shape[0]
     n_samples = x.shape[1]
     embr = tparams['Wemb'][xr.flatten()]
@@ -606,8 +606,8 @@ def build_rev_model(tparams, options, x, y, x_mask):
     probs = tensor.nnet.softmax(
         logit.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]]))
 
-    targets = xr[1:]
-    targets_mask = xr_mask[1:]
+    targets = xr
+    targets_mask = xr_mask
 
     # cost
     x_flat = targets.flatten()
@@ -674,10 +674,10 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     n_done = 0
 
     for x, y in reader.ptb_iterator(data, options['batch_size'], options['maxlen']):
-        x = x.transpose(1, 0, 2)
-        y = y.transpose(1, 0, 2)
+        x = x.T
+        y = y.T
+
         x_mask = np.ones((x.shape[0], x.shape[1]), dtype='float32')
-        x_mask = x_mask.transpose(1, 0)
         n_done += x.shape[1]
 
         zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(
@@ -790,7 +790,7 @@ def train(dim_word=200,  # input vector dimensionality
     inps = [x, y, x_mask, zmuv, weight_f]
     f_log_probs = theano.function(
         inps[:-1], ELBOcost(nll_gen, kld, kld_weight=1.),
-        updates=(updates_gen + updates_rev), profile=profile)
+        updates=(updates_gen + updates_rev), profile=profile, on_unused_input='ignore')
     print('Done')
 
     print('Computing gradient...')
@@ -805,7 +805,7 @@ def train(dim_word=200,  # input vector dimensionality
     # forward pass + gradients
     outputs = [vae_cost, aux_cost, tot_cost, kld_cost, elbo_cost, nll_rev_cost, nll_gen_cost, non_finite]
     print('Fprop')
-    f_prop = theano.function(inps, outputs, updates=all_gsup)
+    f_prop = theano.function(inps, outputs, updates=all_gsup, on_unused_input='ignore')
     print('Fupdate')
     f_update = eval(optimizer)(lr, tparams, all_gshared)
 
