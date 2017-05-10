@@ -44,18 +44,43 @@ def plot_scatter_iamondb_example(X, y=None, equal=True, show=False, save=False,
 
 
 def plot_lines_iamondb_example(X, y=None, equal=True, show=False, save=False,
-                               save_name="tmp.png"):
+                               save_name="tmp.png", mask=None, offsets_provided=False,
+                               mean=None, std=None, colored=True):
+    if mask is None:
+        mask = np.ones(X.shape[0])
+    
+    pen_ups = X[:, 0] + (1-mask)
 
-    val_index = np.where(X[:, 0] != 1)[0]
-    contiguous = np.where((val_index[1:] - val_index[:-1]) == 1)[0] + 1
-    non_contiguous = np.where((val_index[1:] - val_index[:-1]) != 1)[0] + 1
-    prev_nc = 0
+    if std is not None:
+        X = X * std
 
-    for nc in val_index[non_contiguous]:
-        ind = ((prev_nc <= contiguous) & (contiguous < nc))[:-1]
-        prev_nc = nc
-        plt.plot(X[val_index[ind], 1], X[val_index[ind], 2])
-    plt.plot(X[prev_nc:, 1], X[prev_nc:, 2])
+    if mean is not None:
+        X = X + mean
+
+    if offsets_provided:
+        X = np.cumsum(X, axis=0)
+
+    color = None if colored else "k"
+
+    start = 0
+    val_index = np.where(pen_ups == 1)[0]
+    for i, end in enumerate(val_index):
+        if mask[start]:
+            plt.plot(X[start:end, 1], X[start:end, 2], color=color)
+        start = end + 1
+    
+    if start < len(X):
+        plt.plot(X[start:, 1], X[start:, 2], color=color)
+
+    #contiguous = np.where((val_index[1:] - val_index[:-1]) == 1)[0] + 1
+    #non_contiguous = np.where((val_index[1:] - val_index[:-1]) != 1)[0] + 1
+    #prev_nc = 0
+
+    #for nc in val_index[non_contiguous]:
+    #    ind = ((prev_nc <= contiguous) & (contiguous < nc))[:-1]
+    #    prev_nc = nc
+    #    plt.plot(X[val_index[ind], 1], X[val_index[ind], 2], '.-')
+    #plt.plot(X[prev_nc:, 1], X[prev_nc:, 2])
 
     if y is not None:
         plt.title(y)
