@@ -17,6 +17,7 @@ import sys
 
 import warnings
 import time
+import matplotlib.pyplot as plt
 
 from collections import OrderedDict
 
@@ -800,7 +801,7 @@ def build_sampler(tparams, options, trng):
     u = trng.uniform(size=binary.shape)
     o = u < binary  # Pen's up
 
-    next_samples = T.concatenate([o, x, y], axis=1)
+    next_samples = T.stack([o, x, y], axis=1)
 
     # Evaluate the NLL of the samples
     # Copy the reshaping they do in VRNN before computing NLL.
@@ -875,14 +876,13 @@ def train(dim_input=3,  # input vector dimensionality
           kl_rate=0.0003):
 
     prior_hidden = dim
-    dim_z = 50  # Like VRNN
+    dim_z = 256  # Like VRNN
     encoder_hidden = dim
     learn_h0 = False
 
     desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
     opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
-    # model_file = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
-    model_file = saveto + 'model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
+    model_file = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_model.npz'
 
     print(desc)
 
@@ -907,13 +907,13 @@ def train(dim_input=3,  # input vector dimensionality
 
     print('Building model')
     params = init_params(model_options)
-    tparams = init_tparams(params)
 
     # reload parameters
     if reload_ and os.path.isfile(model_file):
         params = load_params(model_file, params)
-        tparams = init_tparams(params)
 
+    tparams = init_tparams(params)
+    
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
     x_mask = tensor.matrix('x_mask')
@@ -950,9 +950,9 @@ def train(dim_input=3,  # input vector dimensionality
 
 
     # reload parameters
-    if True:#reload_ and os.path.isfile(model_file):
-        valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, batch_size, source='valid')
-        print("Valid: {}".format(valid_err))
+    if reload_ and os.path.isfile(model_file):
+        #valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, batch_size, source='valid')
+        #print("Valid: {}".format(valid_err))
 
         trng = RandomStreams(42)
         f_next = build_sampler(tparams, model_options, trng)
