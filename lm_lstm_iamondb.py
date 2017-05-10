@@ -804,13 +804,6 @@ def build_sampler(tparams, options, trng):
     next_samples = T.stack([o, x, y], axis=1)
 
     # Evaluate the NLL of the samples
-    # Copy the reshaping they do in VRNN before computing NLL.
-    # x_shape = x.shape
-    # mus = mus.reshape((x_shape[0]*x_shape[1], -1))
-    # logvars = logvars.reshape((x_shape[0]*x_shape[1], -1))
-    # corr = corr.reshape((x_shape[0]*x_shape[1], -1))
-    # binary = binary.reshape((x_shape[0]*x_shape[1], -1))
-    # next_probs = T.sum(log_prob_gaussian(next_samples, mean=mus, log_var=logvars), axis=1)
     next_ln_p = nll_BiGauss(next_samples[None, :, :], mus, logvars, corr, binary)
 
     # next word probability
