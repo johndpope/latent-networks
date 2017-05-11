@@ -39,7 +39,7 @@ if __name__ == '__main__':
         'optimizer': ['adam'],
         'decay-c': [0.],
         'kl_start': [0.2],
-        'weight_aux': [0.1],
+        'weight_aux': [0.05],
         'use-dropout': [False],
         'learning-rate': [0.0001],
         'reload': [False]})
