@@ -883,7 +883,7 @@ def train(dim_input=3,  # input vector dimensionality
     # Model options
     model_options = locals().copy()
     pkl.dump(model_options, open(opts, 'wb'))
-    log_file = open(desc, 'w')
+    log_file = open(desc, 'a')  # Append to log file.
 
     # Load data
     data_path = './datasets/iamondb/'
