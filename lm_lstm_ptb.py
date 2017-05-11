@@ -606,6 +606,8 @@ def build_rev_model(tparams, options, x, y, x_mask):
     probs = tensor.nnet.softmax(
         logit.reshape([logit_shp[0]*logit_shp[1], logit_shp[2]]))
 
+    states_rev = states_rev[::-1]
+
     targets = xr
     targets_mask = xr_mask
 
