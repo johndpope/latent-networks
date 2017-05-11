@@ -23,7 +23,9 @@ def build_parser():
 
     parser.add_argument("--seqlen", type=int, default=500,
                         help="Sequence length. Default: %(default)s")
-    parser.add_argument("--seed", type=int,
+    parser.add_argument("--nb-samples", type=int, default=10,
+                        help="Number of samples. Default: %(default)s")
+    parser.add_argument("--seed", type=int, default=1234,
                         help="Seed for the random generator. Default: always different")
 
     parser.add_argument("--eval", action="store_true", help="Run evaluation.")
@@ -90,14 +92,17 @@ def main():
 
     trng = RandomStreams(args.seed)
     from lm_lstm_iamondb import build_sampler, gen_sample
-    f_next = build_sampler(tparams, model_options, trng)
-    sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=args.seqlen, argmax=False)
-
-    print("NLL: {}".format(sample_score))
     from iamondb_utils import plot_lines_iamondb_example
-    plot_lines_iamondb_example(sample[0], offsets_provided=True,
-                               mean=X_mean, std=X_std, colored=True,
-                               show=True)
+    f_next = build_sampler(tparams, model_options, trng)
+    samples = []
+    for i in range(args.nb_samples):
+        sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=args.seqlen, argmax=False)
+        samples += [sample]
+        print("NLL: {}".format(sample_score))
+
+        plot_lines_iamondb_example(sample[0], offsets_provided=True,
+                                   mean=X_mean, std=X_std, colored=True,
+                                   show=True)
 
     dbg()
 
