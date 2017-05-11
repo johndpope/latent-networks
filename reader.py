@@ -8,6 +8,42 @@ import os
 import numpy as np
 import cPickle as pkl
 
+def _read_sentences(filename):
+    '''Read sentence segmented PTB.'''
+    with open(filename, 'r') as f:
+        return map(lambda x: x.replace('\n', "<eos>"), f.readlines())
+
+def corrupt(seq, p0, p1):
+    """Delete words with p0, swap non-overlapping bi-grams with p1.
+
+    WARNING: Not optimized for speed!
+
+    Parameters
+    ----------
+    seq : list
+        List of elements to delete or swap (tokens or indices)
+    p0 : float [0, 1]
+        Probability of dropping a word.
+    p1 : float [0, 1]
+        Probability of swapping non-overlapping bi-grams.
+    Returns
+    -------
+    list
+        Corrupted sequence.
+    """
+    # using len(seq) number of bernoulli random variables
+    del_mask = np.random.binomial(1, p0, len(seq))
+    seq_prime = [x for x, y in zip(seq, del_mask) if y != 1]
+    if len(seq_prime) > 1:  # swapping not defined for one symbol
+        swap_probs = np.random.binomial(1, p1, int(len(seq_prime)/2))
+        for i in range(0, len(swap_probs)):
+            if swap_probs[i] == 1:
+                a = seq_prime[i*2+1]  # second element of 2-gram
+                b = seq_prime[i*2]    # first element of 2-gram
+                seq_prime[i*2+1] = b
+                seq_prime[i*2] = a
+    return seq_prime
+
 def _read_words(filename):
     with open(filename, "r") as f:
         return f.read().replace("\n", "<eos>").split()
@@ -48,7 +84,7 @@ def ptb_raw_data(data_path=None):
     valid_path = os.path.join(data_path, "ptb.valid.txt")
     test_path = os.path.join(data_path, "ptb.test.txt")
 
-    dictionary = '/data/lisatmp4/anirudhg/ptb/ptb_dict_word.pkl'
+    dictionary = data_path + '/ptb_dict_word.pkl'
     with open(dictionary, 'rb') as f:
         worddicts = pkl.load(f)
     word_to_id = worddicts#_build_vocab(train_path)
@@ -89,4 +125,31 @@ def ptb_iterator(raw_data, batch_size, num_steps):
     for i in range(epoch_size):
         x = data[:, i * num_steps:(i + 1) * num_steps]
         y = data[:, i * num_steps + 1:(i + 1) * num_steps + 1]
-        yield (x, y)
+        #yield (x, y)
+        print(x)
+
+
+def ptb_sentence_iterator(data_path, p_drop, p_swap, l):
+    """Iterate on the raw PTB data.
+    This generates batch_size pointers into the raw PTB data, and allows
+    minibatch iteration along these pointers.
+    Args:
+      data_path: Path to the data folder.
+      p_drop: float, Probability of dropping a word
+      p_swap: float, Probability of swapping elements (after dropping)
+      l: int, keep last l words
+    """
+    raw_sents = _read_sentences(os.path.join(data_path, "ptb.train.txt"))
+    dictionary = data_path+'/ptb_dict_word.pkl'
+    with open(dictionary, 'rb') as f:
+        worddicts = pkl.load(f)
+    word_to_id = worddicts
+    for sent in raw_sents:
+        s = sent.split()
+        ss = np.array([word_to_id[w] if w in word_to_id else 1 for w in s])
+        ss_hat = corrupt(ss[:l], p_drop, p_swap)
+        yield(ss, ss_hat)
+
+#raw = ptb_raw_data('./data')
+#ptb_iterator(raw[0], 10, 50)
+ptb_sentence_iterator('./data', 0.5, 0.5, 4)
