@@ -28,6 +28,9 @@ def build_parser():
     parser.add_argument("--seed", type=int, default=1234,
                         help="Seed for the random generator. Default: always different")
 
+    parser.add_argument("--show-real-data", action="store_true",
+                        help="Show real data from validset instead sampling.")
+
     parser.add_argument("--eval", action="store_true", help="Run evaluation.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
 
@@ -59,6 +62,27 @@ def main():
     params = init_params(model_options)
     params = load_params(model_file, params)
     tparams = init_tparams(params)
+
+    if args.show_real_data:
+        iamondb_valid = IAMOnDB(name='valid',
+                          prep='normalize',
+                          cond=False,
+                          path=data_path,
+                          X_mean=X_mean, X_std=X_std)
+
+        dset_size = len(iamondb_valid.data[0])
+        for start in range(0, dset_size, 1):
+            end = start + 10
+            # x.shape : seq_len, batch_size, input_dim
+            x, x_mask = iamondb_valid.slices(start, end)
+
+            from iamondb_utils import plot_lines_iamondb_example
+            #print("NLL: {}".format(sample_score))
+
+            plot_lines_iamondb_example(x, offsets_provided=True,
+                                       mask=x_mask,
+                                       mean=X_mean, std=X_std, colored=True,
+                                       show=True)
 
     if args.eval:
         from lm_lstm_iamondb import ELBOcost, build_rev_model, build_gen_model, pred_probs
@@ -100,9 +124,9 @@ def main():
         samples += [sample]
         print("NLL: {}".format(sample_score))
 
-        plot_lines_iamondb_example(sample[0], offsets_provided=True,
-                                   mean=X_mean, std=X_std, colored=True,
-                                   show=True)
+    plot_lines_iamondb_example(samples.transpose(1, 0, 2), offsets_provided=True,
+                               mean=X_mean, std=X_std, colored=True,
+                               show=True)
 
     dbg()
 

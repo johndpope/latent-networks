@@ -45,11 +45,16 @@ def plot_scatter_iamondb_example(X, y=None, equal=True, show=False, save=False,
 
 def plot_lines_iamondb_example(X, y=None, equal=True, show=False, save=False,
                                save_name="tmp.png", mask=None, offsets_provided=False,
-                               mean=None, std=None, colored=True):
+                               mean=None, std=None, colored=True,
+                               scatter=False):
+
+    if X.ndim == 2:
+        X = X[:, None, :]
+
     if mask is None:
-        mask = np.ones(X.shape[0])
-    
-    pen_ups = X[:, 0] + (1-mask)
+        mask = np.ones((X.shape[0], X.shape[1]))
+
+    pen_ups = X[:, :, 0] + (1-mask)
 
     if std is not None:
         X = X * std
@@ -62,16 +67,30 @@ def plot_lines_iamondb_example(X, y=None, equal=True, show=False, save=False,
 
     color = None if colored else "k"
 
-    start = 0
-    val_index = np.where(pen_ups == 1)[0]
-    for i, end in enumerate(val_index):
-        if mask[start]:
-            plt.plot(X[start:end, 1], X[start:end, 2], color=color)
-        start = end + 1
-    
-    if start < len(X):
-        plt.plot(X[start:, 1], X[start:, 2], color=color)
+    y_offset = 0
+    for k in range(X.shape[1]):
+        if scatter:
+            plt.scatter(X[:, k, 1], X[:, k, 2] - y_offset, color='k')
 
+        start = 0
+        val_index = np.where(pen_ups[:, k] == 1)[0]
+        _y_offset = 0
+        for i, end in enumerate(val_index):
+            if mask[start, k] and end-start > 1:
+                plt.plot(X[start:end, k, 1], X[start:end, k, 2] - y_offset, color=color)
+                _y_offset = max(_y_offset, X[start:end, k, 2].max() - X[start:end, k, 2].min())
+            start = end + 1
+
+        if start < len(X):
+            plt.plot(X[start:, k, 1], X[start:, k, 2] - y_offset, color=color)
+            _y_offset = max(_y_offset, X[start:, k, 2].max() - X[start:, k, 2].min())
+
+        y_offset += _y_offset + 10
+
+        # Reset matplotlib colors cycle.
+        plt.gca().set_color_cycle(None)
+
+    # <OLD CODE>
     #contiguous = np.where((val_index[1:] - val_index[:-1]) == 1)[0] + 1
     #non_contiguous = np.where((val_index[1:] - val_index[:-1]) != 1)[0] + 1
     #prev_nc = 0
@@ -81,6 +100,7 @@ def plot_lines_iamondb_example(X, y=None, equal=True, show=False, save=False,
     #    prev_nc = nc
     #    plt.plot(X[val_index[ind], 1], X[val_index[ind], 2], '.-')
     #plt.plot(X[prev_nc:, 1], X[prev_nc:, 2])
+    # </OLD CODE>
 
     if y is not None:
         plt.title(y)
