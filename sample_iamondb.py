@@ -3,23 +3,40 @@ Build a simple neural language model using GRU units
 '''
 from __future__ import print_function
 
-from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-
+import sys
+import argparse
+import numpy as np
 import cPickle as pkl
 from ipdb import set_trace as dbg
-import numpy
-import sys
 
 import matplotlib.pyplot as plt
 
+import theano
+import theano.tensor as T
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 
-profile = False
-seed = 1234
-numpy.random.seed(seed)
 
+def build_parser():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("model", help="Model params (.npz)")
+
+    parser.add_argument("--seqlen", type=int, default=500,
+                        help="Sequence length. Default: %(default)s")
+    parser.add_argument("--seed", type=int,
+                        help="Seed for the random generator. Default: always different")
+
+    parser.add_argument("--eval", action="store_true", help="Run evaluation.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
+
+    return parser
 
 def main():
-    model_file = sys.argv[1]
+    parser = build_parser()
+    args = parser.parse_args()
+
+    np.random.seed(args.seed)
+    model_file = args.model
     opts = model_file[:-len("_model.npz")] + "_opts.pkl"
     model_options = pkl.load(open(opts, 'rb'))
 
@@ -30,6 +47,7 @@ def main():
                       prep='normalize',
                       cond=False,
                       path=data_path)
+
     X_mean = iamondb.X_mean
     X_std = iamondb.X_std
 
@@ -40,16 +58,46 @@ def main():
     params = load_params(model_file, params)
     tparams = init_tparams(params)
 
-    trng = RandomStreams(42)
+    if args.eval:
+        from lm_lstm_iamondb import ELBOcost, build_rev_model, build_gen_model, pred_probs
+
+        iamondb_valid = IAMOnDB(name='valid',
+                          prep='normalize',
+                          cond=False,
+                          path=data_path,
+                          X_mean=X_mean, X_std=X_std)
+
+        x = T.tensor3('x')
+        y = T.tensor3('y')
+        x_mask = T.matrix('x_mask')
+        zmuv = T.tensor3('zmuv')
+        weight_f = T.scalar('weight_f')
+
+        # build the symbolic computational graph
+        nll_rev, states_rev, updates_rev = \
+            build_rev_model(tparams, model_options, x, y, x_mask)
+        nll_gen, states_gen, kld, rec_cost_rev, updates_gen = \
+            build_gen_model(tparams, model_options, x, y, x_mask, zmuv, states_rev)
+
+        print('Building f_log_probs...')
+        inps = [x, y, x_mask, zmuv, weight_f]
+        f_log_probs = theano.function(inps[:-1], ELBOcost(nll_gen, kld, kld_weight=1.),
+                                      updates=(updates_gen + updates_rev), profile=False)
+        print('Done')
+
+        valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, 20, source='valid')
+        print("Valid: {}".format(valid_err))
+
+    trng = RandomStreams(args.seed)
     from lm_lstm_iamondb import build_sampler, gen_sample
     f_next = build_sampler(tparams, model_options, trng)
-    sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=200, argmax=False)
+    sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=args.seqlen, argmax=False)
 
+    print("NLL: {}".format(sample_score))
     from iamondb_utils import plot_lines_iamondb_example
     plot_lines_iamondb_example(sample[0], offsets_provided=True,
-                               mean=X_mean, std=X_std, colored=True)
-    print("NLL: {}".format(sample_score))
-    plot_lines_iamondb_example(sample[0], show=True)
+                               mean=X_mean, std=X_std, colored=True,
+                               show=True)
 
     dbg()
 
