@@ -36,6 +36,7 @@ def build_parser():
 
     return parser
 
+
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -124,6 +125,12 @@ def main():
         samples += [sample]
         print("NLL: {}".format(sample_score))
 
+        plot_lines_iamondb_example(sample[0], offsets_provided=True,
+                                   mean=X_mean, std=X_std, colored=True,
+                                   show=True)
+
+    # Print all of them
+    samples = np.concatenate(samples, axis=0)
     plot_lines_iamondb_example(samples.transpose(1, 0, 2), offsets_provided=True,
                                mean=X_mean, std=X_std, colored=True,
                                show=True)
