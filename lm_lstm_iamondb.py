@@ -1,6 +1,7 @@
 '''
 Build a simple neural language model using GRU units
 '''
+from __future__ import print_function
 
 import numpy as np
 import os
@@ -906,7 +907,7 @@ def train(dim_input=3,  # input vector dimensionality
         params = load_params(model_file, params)
 
     tparams = init_tparams(params)
-    
+
     x = tensor.tensor3('x')
     y = tensor.tensor3('y')
     x_mask = tensor.matrix('x_mask')
@@ -1046,20 +1047,41 @@ def train(dim_input=3,  # input vector dimensionality
         print('Starting validation...')
         valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, batch_size, source='valid')
         history_errs.append(valid_err)
+
+        # Print validation
         str1 = 'Valid ELBO: {:.2f}'.format(valid_err)
         print(str1)
         log_file.write(str1 + '\n')
 
-        # finish after this many updates
-        if uidx >= finish_after:
-            print('Finishing after %d iterations!' % uidx)
-            break
+        if uidx == 0 or valid_err <= np.min(history_errs):
+            best_p = unzip(tparams)
+            bad_counter = 0
 
-    valid_err = pred_probs(f_log_probs, model_options, iamondb_valid, batch_size, source='valid')
-    str1 = 'Valid ELBO: {:.2f}'.format(valid_err)
-    print(str1)
-    log_file.write(str1 + '\n')
+            print('Saving...', end='')
+            if best_p is not None:
+                params = best_p
+            else:
+                params = unzip(tparams)
+            numpy.savez(model_file, **params)
+            pkl.dump(model_options, open(opts, 'wb'))
+            print('Done')
+
+        if len(history_errs) > patience and valid_err >= np.min(history_errs[:-patience]):
+            bad_counter += 1
+            if bad_counter > patience:
+                print('Early Stop!')
+                break
+
     log_file.close()
+
+    if best_p is not None:
+        zipp(best_p, tparams)
+
+    params = copy.copy(best_p)
+    numpy.savez(model_file, zipped_params=best_p,
+                history_errs=history_errs,
+                **params)
+
     return valid_err
 
 
