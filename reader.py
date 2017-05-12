@@ -150,6 +150,3 @@ def ptb_sentence_iterator(data_path, p_drop, p_swap, l):
         ss_hat = corrupt(ss[:l], p_drop, p_swap)
         yield(ss, ss_hat)
 
-#raw = ptb_raw_data('./data')
-#ptb_iterator(raw[0], 10, 50)
-ptb_sentence_iterator('./data', 0.5, 0.5, 4)
