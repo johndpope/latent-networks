@@ -20,12 +20,10 @@ import time
 from collections import OrderedDict
 
 #from char_data_iterator import TextIterator
-
 profile = False
-seed = 1234
-numpy.random.seed(seed)
 
-def gradient_clipping(grads, tparams, clip_c=1.0):
+
+def gradient_clipping(grads, tparams, clip_c=100):
     g2 = 0.
     for g in grads:
         g2 += (g**2).sum()
@@ -471,13 +469,13 @@ def latent_lstm_layer(
               inf_mus_w, inf_mus_b,
               gen_mus_w, gen_mus_b):
 
-        p_z = tensor.nnet.softplus(tensor.dot(sbefore, trans_1_w) + trans_1_b)
+        p_z = lrelu(tensor.dot(sbefore, trans_1_w) + trans_1_b)
         z_mus = tensor.dot(p_z, z_mus_w) + z_mus_b
         z_dim = z_mus.shape[-1] / 2
         z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
 
         if d_ is not None:
-            encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
+            encoder_hidden = lrelu(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
             encoder_mus = tensor.dot(encoder_hidden, inf_mus_w) + inf_mus_b
             encoder_mu, encoder_sigma = encoder_mus[:, :z_dim], encoder_mus[:, z_dim:]
             tild_z_t = encoder_mu + g_s * tensor.exp(0.5 * encoder_sigma)
@@ -486,10 +484,8 @@ def latent_lstm_layer(
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
-            decoder_mu = T.clip(decoder_mu, -10., 10.)
-            decoder_sigma = T.clip(decoder_sigma, -10., 10.)
             disc_d_ = theano.gradient.disconnected_grad(d_)
-            recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
+            recon_cost = -log_prob_gaussian(disc_d_, decoder_mu, decoder_sigma)
             recon_cost = tensor.sum(recon_cost, axis=-1)
         else:
             tild_z_t = z_mu + g_s * tensor.exp(0.5 * z_sigma)
@@ -611,9 +607,6 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out = lrelu(out_lstm + out_prev)
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
-    # clip reverse prediction
-    out_mu = T.clip(out_mu, -10., 10.)
-    out_logvar = T.clip(out_logvar, -10., 10.)
 
     # shift mus for prediction [o4, o3, o2]
     # targets are [x3, x2, x1]
@@ -623,8 +616,8 @@ def build_rev_model(tparams, options, x, y, x_mask):
     targets_mask = xr_mask[1:]
     # states_rev = [s4, s3, s2, s1]
     # cut first state out (info about x4 is in s3)
-    # posterior sees (s1, s2, s3) in order to predict x2, x3, x4
-    states_rev = states_rev[1:][::-1]
+    # posterior sees (s2, s3, s4) in order to predict x2, x3, x4
+    states_rev = states_rev[:-1][::-1]
     # ...
     assert xr_mask.ndim == 2
     assert xr.ndim == 3
@@ -735,18 +728,20 @@ def train(dim_input=200,  # input vector dimensionality
           use_dropout=False,
           reload_=False,
           kl_start=0.2,
-          weight_aux=0.,
+          weight_aux=0.0005,
           kl_rate=0.0003):
 
     prior_hidden = dim
     dim_z = 256
     encoder_hidden = dim
     learn_h0 = False
+    weight_aux = 0.
+    weight_nll = 0.
 
-    desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
-    opts = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
-
-    print(desc)
+    desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' + \
+        str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
+    opts = saveto + 'model_' + str(weight_aux) + '_weight_aux_' + \
+        str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_opts.pkl'
 
     # Model options
     model_options = locals().copy()
@@ -774,7 +769,7 @@ def train(dim_input=200,  # input vector dimensionality
 
     vae_cost = ELBOcost(nll_gen, kld, kld_weight=weight_f).mean()
     elbo_cost = ELBOcost(nll_gen, kld, kld_weight=1.).mean()
-    aux_cost = (numpy.float32(weight_aux) * (rec_cost_rev + nll_rev)).mean()
+    aux_cost = (numpy.float32(weight_aux) * rec_cost_rev + weight_nll * nll_rev).mean()
     tot_cost = (vae_cost + aux_cost)
     nll_gen_cost = nll_gen.mean()
     nll_rev_cost = nll_rev.mean()
@@ -791,7 +786,7 @@ def train(dim_input=200,  # input vector dimensionality
     grads = tensor.grad(tot_cost, itemlist(tparams))
     print('Done')
 
-    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 5.)
+    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 100.)
     # update function
     all_gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
                    for k, p in tparams.iteritems()]
@@ -817,6 +812,7 @@ def train(dim_input=200,  # input vector dimensionality
     bad_counter = 0
     kl_start = model_options['kl_start']
     kl_rate = model_options['kl_rate']
+    old_valid_err = numpy.inf
 
     for eidx in range(max_epochs):
         print("Epoch: {}".format(eidx))
@@ -837,13 +833,11 @@ def train(dim_input=200,  # input vector dimensionality
             ud_start = time.time()
             # compute cost, grads and copy grads to shared variables
             zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(x.shape[0], x.shape[1], model_options['dim_z'])).astype('float32')
-            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np, not_finite_np = \
+            vae_cost_np, aux_cost_np, tot_cost_np, kld_cost_np, elbo_cost_np, nll_rev_cost_np, nll_gen_cost_np, not_finite = \
                 f_prop(x, y, x_mask, zmuv, np.float32(kl_start))
-            if numpy.isnan(tot_cost_np) or numpy.isinf(tot_cost_np) or not_finite_np:
-                print('Nan cost... skipping')
+            if not_finite:
                 continue
-            else:
-                f_update(numpy.float32(lrate))
+            f_update(numpy.float32(lrate))
 
             # update costs
             tr_costs[0].append(vae_cost_np)
@@ -864,14 +858,16 @@ def train(dim_input=200,  # input vector dimensionality
                 log_file.write(str1 + '\n')
                 log_file.flush()
 
-        if eidx in [10, 20]:
-            lrate = lrate / 2.0
-
         print 'Starting validation...'
         valid_err = pred_probs(f_log_probs, model_options, data, source='valid')
         test_err = pred_probs(f_log_probs, model_options, data, source='test')
         history_errs.append(valid_err)
         str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
+
+        if (old_valid_err < valid_err) and lrate > 0.0001:
+            lrate = lrate / 2.0
+
+        old_valid_err = history_errs[-1]
         print(str1)
         log_file.write(str1 + '\n')
 
