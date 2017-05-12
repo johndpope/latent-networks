@@ -413,7 +413,8 @@ def latent_lstm_layer(
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
             disc_d_ = theano.gradient.disconnected_grad(d_)
-            recon_cost = -log_prob_gaussian(disc_d_, decoder_mu, decoder_sigma)
+            # recon_cost = -log_prob_gaussian(disc_d_, decoder_mu, decoder_sigma)
+            recon_cost = (disc_d_ - decoder_mu) ** 2.0
             recon_cost = tensor.sum(recon_cost, axis=-1)
         else:
             tild_z_t = z_mu + g_s * tensor.exp(0.5 * z_sigma)
