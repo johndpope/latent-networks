@@ -786,7 +786,6 @@ def train(dim_word=200,  # input vector dimensionality
         tr_costs = [[], [], [], [], [], [], []]
 
         for data in train.get_epoch_iterator():
-            valid_err = pred_probs(f_log_probs, model_options, valid, source='valid')
             x = data[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
             x = x.T
             y = x
