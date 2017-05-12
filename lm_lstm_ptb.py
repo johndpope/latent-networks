@@ -548,6 +548,7 @@ def build_rev_model(tparams, options, x, y, x_mask):
     targets_flat = targets.flatten()
     targets_flat_idx = tensor.arange(targets_flat.shape[0]) * options['n_words'] + targets_flat
     log_p_y = -tensor.log(probs.flatten()[targets_flat_idx])
+    log_p_y = log_p_y.reshape([targets.shape[0], targets.shape[1]])
     nll_rev = -log_p_y
     nll_rev = (nll_rev * targets_mask).sum(0)
     return nll_rev, states_rev, updates_rev
@@ -691,6 +692,11 @@ def train(dim_word=200,  # input vector dimensionality
     x_mask = tensor.matrix('x_mask', dtype='float32')
     y = tensor.matrix('y', dtype='int64')
 
+    # Debug test_value
+    x.tag.test_value = 10*np.random.rand(11, 20).astype("int64")
+    y.tag.test_value = 10*np.random.rand(11, 20).astype("int64")
+    x_mask.tag.test_value = np.ones((11, 20)).astype("float32")
+
     zmuv = tensor.tensor3('zmuv')
     weight_f = tensor.scalar('weight_f')
     lr = tensor.scalar('lr')
@@ -755,7 +761,6 @@ def train(dim_word=200,  # input vector dimensionality
 
         for x, y in reader.ptb_iterator(train_data, batch_size, maxlen):
             # Transpose data to have the time steps on dimension 0.
-            from ipdb import set_trace; set_trace()
             x = x.T
             y = y.T
 
