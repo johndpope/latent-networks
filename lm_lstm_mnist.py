@@ -607,6 +607,12 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     n_done = 0
 
     for something in data.get_epoch_iterator():
+        x = something[0]
+        if x is None:
+            print 'Minibatch with zero sample under length ', maxlen
+            continue
+        if x.shape[0] is not model_options['batch_size']:
+            continue
         x = something[0].reshape((options['batch_size'], options['maxlen'])).astype('int64')
 
         x = x.T
@@ -786,7 +792,16 @@ def train(dim_word=200,  # input vector dimensionality
         tr_costs = [[], [], [], [], [], [], []]
 
         for data in train.get_epoch_iterator():
+            x = data[0]
+            if x is None:
+                print 'Minibatch with zero sample under length ', maxlen
+                uidx -= 1
+                continue
+            if x.shape[0] is not model_options['batch_size']:
+                uidx -= 1
+                continue
             x = data[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
+
             x = x.T
             y = x
             x_mask = np.ones((model_options['maxlen'], model_options['batch_size'])).astype('float32')
