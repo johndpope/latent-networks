@@ -483,9 +483,10 @@ def latent_lstm_layer(
             kld = tensor.sum(kld, axis=-1)
             decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
+            decoder_sigma = tensor.clip(decoder_sigma, -8., 8.)
             decoder_mu = tensor.tanh(decoder_mu)
             disc_d_ = theano.gradient.disconnected_grad(d_)
-            recon_cost = -log_prob_gaussian(disc_d_, decoder_mu, decoder_sigma)
+            recon_cost = (disc_d_ - decoder_mu) ** 2.0
             recon_cost = tensor.sum(recon_cost, axis=-1)
         else:
             tild_z_t = z_mu + g_s * tensor.exp(0.5 * z_sigma)
@@ -735,8 +736,8 @@ def train(dim_input=200,  # input vector dimensionality
     dim_z = 256
     encoder_hidden = dim
     learn_h0 = False
-    weight_aux = 0.
-    weight_nll = 0.
+    weight_aux = 0.05
+    weight_nll = 0.05
 
     desc = saveto + 'model_' + str(weight_aux) + '_weight_aux_' + \
         str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
