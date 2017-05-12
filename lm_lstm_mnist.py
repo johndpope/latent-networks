@@ -606,8 +606,9 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     rvals = []
     n_done = 0
 
-    for data in iterator.get_epoch_iterator():
-        x = data[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
+    for something in data.get_epoch_iterator():
+        x = something[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
+
         x = x.T
         y = x
         x_mask = np.ones((model_options['maxlen'], model_options['batch_size'])).astype('float32')
@@ -693,7 +694,6 @@ def train(dim_word=200,  # input vector dimensionality
           weight_aux=0.,
           kl_rate=0.0003):
     dim_proj = dim
-    data_path = '/data/lisatmp4/anirudhg/ptb/'
     prior_hidden = dim
     dim_z = 256
     encoder_hidden = dim
@@ -786,6 +786,7 @@ def train(dim_word=200,  # input vector dimensionality
         tr_costs = [[], [], [], [], [], [], []]
 
         for data in train.get_epoch_iterator():
+            valid_err = pred_probs(f_log_probs, model_options, valid, source='valid')
             x = data[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
             x = x.T
             y = x
