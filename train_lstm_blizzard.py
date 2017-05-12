@@ -15,7 +15,7 @@ def main(job_id, params):
         optimizer=params['optimizer'][0],
         dim_proj=params['dim_proj'][0],
         weight_aux=params['weight_aux'][0],
-        batch_size=128,
+        batch_size=128,  # SRNN
         valid_batch_size=32,
         dispFreq=10,
         saveFreq=1000,
@@ -25,7 +25,7 @@ def main(job_id, params):
         dictionary=None,
         use_dropout=params['use-dropout'][0],
         kl_start=params['kl_start'][0],
-        kl_rate=0.00005)
+        kl_rate=0.0001)  # SRNN
     return validerr
 
 if __name__ == '__main__':
@@ -38,12 +38,12 @@ if __name__ == '__main__':
     main(0, {
         'model': ['./experiments/blizzard/'],
         'dim_input': [200],
-        'dim': [2048],
-        'dim_proj': [800],
+        'dim': [2048],  # SRNN
+        'dim_proj': [600],
         'optimizer': ['adam'],
         'decay-c': [0.],
         'kl_start': [0.2],
-        'weight_aux': [0.1],
+        'weight_aux': [0.],
         'use-dropout': [False],
         'learning-rate': [0.001],
         'reload': [False]})

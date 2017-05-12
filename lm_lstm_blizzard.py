@@ -18,19 +18,18 @@ from collections import OrderedDict
 from blizzard import Blizzard_tbptt
 from util import Iterator
 #from char_data_iterator import TextIterator
-
 profile = False
 seed = 1234
 numpy.random.seed(seed)
 
-def gradient_clipping(grads, tparams, clip_c=1.0):
+
+def gradient_clipping(grads, tparams, clip_c=100):
     g2 = 0.
     for g in grads:
         g2 += (g**2).sum()
     g2 = tensor.sqrt(g2)
     not_finite = tensor.or_(tensor.isnan(g2), tensor.isinf(g2))
     new_grads = []
-    lr = tensor.scalar(name='lr')
     for p, g in zip(tparams.values(), grads):
         new_grads.append(tensor.switch(
             g2 > clip_c, g * (clip_c / g2), g))
@@ -398,13 +397,13 @@ def latent_lstm_layer(
               inf_mus_w, inf_mus_b,
               gen_mus_w, gen_mus_b):
 
-        p_z = tensor.nnet.softplus(tensor.dot(sbefore, trans_1_w) + trans_1_b)
+        p_z = lrelu(tensor.dot(sbefore, trans_1_w) + trans_1_b)
         z_mus = tensor.dot(p_z, z_mus_w) + z_mus_b
         z_dim = z_mus.shape[-1] / 2
         z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
 
         if d_ is not None:
-            encoder_hidden = tensor.nnet.softplus(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
+            encoder_hidden = lrelu(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
             encoder_mus = tensor.dot(encoder_hidden, inf_mus_w) + inf_mus_b
             encoder_mu, encoder_sigma = encoder_mus[:, :z_dim], encoder_mus[:, z_dim:]
             tild_z_t = encoder_mu + g_s * tensor.exp(0.5 * encoder_sigma)
@@ -414,7 +413,7 @@ def latent_lstm_layer(
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
             disc_d_ = theano.gradient.disconnected_grad(d_)
-            recon_cost = (tensor.exp(0.5 * decoder_sigma) + tensor.sqr(disc_d_ - decoder_mu)/(2 * tensor.sqr(tensor.exp(0.5 * decoder_sigma))))
+            recon_cost = -log_prob_gaussian(disc_d_, decoder_mu, decoder_sigma)
             recon_cost = tensor.sum(recon_cost, axis=-1)
         else:
             tild_z_t = z_mu + g_s * tensor.exp(0.5 * z_sigma)
@@ -517,9 +516,17 @@ def init_params(options):
 
 def build_rev_model(tparams, options, x, y, x_mask):
     # for the backward rnn, we just need to invert x and x_mask
-    xr = x[::-1]
-    yr = y[::-1]
-    xr_mask = x_mask[::-1]
+    # concatenate first x and all targets y
+    # x = [x1, x2, x3]
+    # y = [x2, x3, x4]
+    xc = tensor.concatenate([x[:1, :, :], y], axis=0)
+    # xc = [x1, x2, x3, x4]
+    xc_mask = tensor.concatenate([tensor.alloc(1, 1, x_mask.shape[1]), x_mask], axis=0)
+    # xc_mask = [1, 1, 1, 0]
+    # xr = [x4, x3, x2, x1]
+    xr = xc[::-1]
+    # xr_mask = [0, 1, 1, 1]
+    xr_mask = xc_mask[::-1]
 
     xr_emb = get_layer('ff')[1](tparams, xr, options, prefix='ff_in_lstm_r', activ='lrelu')
     (states_rev, _), updates_rev = get_layer(options['encoder'])[1](tparams, xr_emb, options, prefix='encoder_r', mask=xr_mask)
@@ -529,17 +536,28 @@ def build_rev_model(tparams, options, x, y, x_mask):
     out_mus = get_layer('ff')[1](tparams, out, options, prefix='ff_out_mus_r', activ='linear')
     out_mu, out_logvar = out_mus[:, :, :options['dim_input']], out_mus[:, :, options['dim_input']:]
 
+    # shift mus for prediction [o4, o3, o2]
+    # targets are [x3, x2, x1]
+    out_mu = out_mu[:-1]
+    out_logvar = out_logvar[:-1]
+    targets = xr[1:]
+    targets_mask = xr_mask[1:]
+    # states_rev = [s4, s3, s2, s1]
+    # cut first state out (info about x4 is in s3)
+    # posterior sees (s2, s3, s4) in order to predict x2, x3, x4
+    states_rev = states_rev[:-1][::-1]
     # ...
-    log_p_y = log_prob_gaussian(yr, mean=out_mu, log_var=out_logvar)
+    assert xr_mask.ndim == 2
+    assert xr.ndim == 3
+    log_p_y = log_prob_gaussian(targets, mean=out_mu, log_var=out_logvar)
     log_p_y = T.sum(log_p_y, axis=-1)     # Sum over output dim.
     nll_rev = -log_p_y                    # NLL
-    nll_rev = (nll_rev * xr_mask).sum(0)
-    return nll_rev, states_rev[::-1], updates_rev
+    nll_rev = (nll_rev * targets_mask).sum(0)
+    return nll_rev, states_rev, updates_rev
 
 
 # build a training model
 def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
-    opt_ret = dict()
     # disconnecting reconstruction gradient from going in the backward encoder
     x_emb = get_layer('ff')[1](tparams, x, options, prefix='ff_in_lstm', activ='lrelu')
     rvals, updates_gen = get_layer('latent_lstm')[1](
@@ -547,7 +565,7 @@ def build_gen_model(tparams, options, x, y, x_mask, zmuv, states_rev):
         prefix='encoder', mask=x_mask, gaussian_s=zmuv,
         back_states=states_rev)
 
-    states_gen, z, kld, rec_cost_rev = rvals[0], rvals[2], rvals[3], rvals[4]
+    states_gen, kld, rec_cost_rev = rvals[0], rvals[3], rvals[4]
     # Compute parameters of the output distribution
     out_lstm = get_layer('ff')[1](tparams, states_gen, options, prefix='ff_out_lstm', activ='linear')
     out_prev = get_layer('ff')[1](tparams, x_emb, options, prefix='ff_out_prev', activ='linear')
@@ -638,8 +656,10 @@ def train(dim_input=200,  # input vector dimensionality
           weight_aux=0.0005,
           kl_rate=0.0003):
 
+    kl_rate = 0.0001  # SRNN paper
+    batch_size = 128  # SRNN paper
     prior_hidden = dim
-    dim_z = 256
+    dim_z = 256  # SRNN
     encoder_hidden = dim
     learn_h0 = False
 
@@ -714,7 +734,7 @@ def train(dim_input=200,  # input vector dimensionality
     grads = tensor.grad(tot_cost, itemlist(tparams))
     print('Done')
 
-    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 10.)
+    all_grads, non_finite, clipped = gradient_clipping(grads, tparams, 100.)
     # update function
     all_gshared = [theano.shared(p.get_value() * 0., name='%s_grad' % k)
                    for k, p in tparams.iteritems()]
@@ -740,6 +760,7 @@ def train(dim_input=200,  # input vector dimensionality
     bad_counter = 0
     kl_start = model_options['kl_start']
     kl_rate = model_options['kl_rate']
+    old_valid_err = numpy.inf
 
     for eidx in range(max_epochs):
         print("Epoch: {}".format(eidx))
@@ -786,14 +807,16 @@ def train(dim_input=200,  # input vector dimensionality
                 log_file.write(str1 + '\n')
                 log_file.flush()
 
-        if eidx in [10, 20]:
-            lrate = lrate / 2.0
-
         print 'Starting validation...'
         valid_err = pred_probs(f_log_probs, model_options, valid_d_, source='valid')
         test_err = pred_probs(f_log_probs, model_options, valid_d_, source='test')
         history_errs.append(valid_err)
         str1 = 'Valid/Test ELBO: {:.2f}, {:.2f}'.format(valid_err, test_err)
+
+        if (old_valid_err < valid_err) and lrate > 0.0001:
+            lrate = lrate / 2.0
+
+        old_valid_err = history_errs[-1]
         print(str1)
         log_file.write(str1 + '\n')
 
