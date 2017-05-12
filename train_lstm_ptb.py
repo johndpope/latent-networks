@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 from lm_lstm_ptb import train
 
 
@@ -31,15 +32,21 @@ def main(job_id, params):
     return validerr
 
 if __name__ == '__main__':
+    try:
+        # Created experiments folder, if needed.
+        os.makedirs("./experiments/ptb/")
+    except:
+        pass
+
     main(0, {
-        'model': ['/data/lisatmp4/anirudhg/latent_autoregressive/models/model_len30_0.05_kl.npz'],
+        'model': ['./experiments/ptb/'],
         'dim_word': [512],
         'dim': [620],
         'n-words': [30000],
         'optimizer': ['adam'],
         'decay-c': [0.],
         'kl_start': [0.2],
-        'weight_aux': [0.05],
+        'weight_aux': [0.],
         'use-dropout': [False],
         'learning-rate': [0.0001],
         'reload': [False]})
