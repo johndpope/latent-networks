@@ -607,11 +607,11 @@ def pred_probs(f_log_probs, options, data, source='valid'):
     n_done = 0
 
     for something in data.get_epoch_iterator():
-        x = something[0].reshape((model_options['batch_size'], model_options['maxlen'])).astype('int64')
+        x = something[0].reshape((options['batch_size'], options['maxlen'])).astype('int64')
 
         x = x.T
         y = x
-        x_mask = np.ones((model_options['maxlen'], model_options['batch_size'])).astype('float32')
+        x_mask = np.ones((options['maxlen'], options['batch_size'])).astype('float32')
         n_done += x.shape[1]
 
         zmuv = numpy.random.normal(loc=0.0, scale=1.0, size=(
