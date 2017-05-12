@@ -818,7 +818,7 @@ def build_sampler(tparams, options, trng):
 
 
 # generate sample
-def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
+def gen_sample(tparams, f_next, options, maxlen=30, argmax=False, kickstart=None):
 
     sample = []
     sample_score = 0
@@ -828,6 +828,9 @@ def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
     next_state = numpy.zeros((1, options['dim'])).astype('float32')
     next_memory = numpy.zeros((1, options['dim'])).astype('float32')
 
+    if kickstart is not None:
+        maxlen = maxlen + len(kickstart)
+
     for ii in range(maxlen):
         zmuv = numpy.random.normal(loc=0.0, scale=1.0,
                                    size=(next_s.shape[0], options['dim_z'])).astype('float32')
@@ -835,6 +838,9 @@ def gen_sample(tparams, f_next, options, maxlen=30, argmax=False):
         inps = [next_s, next_state, next_memory, zmuv]
         ret = f_next(*inps)
         next_ln_p, next_s, next_state, next_memory = ret
+
+        if kickstart is not None and ii < len(kickstart):
+            next_s = kickstart[ii]
 
         sample.append(next_s)
         sample_score += next_ln_p

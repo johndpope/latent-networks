@@ -32,6 +32,7 @@ def build_parser():
                         help="Show real data from validset instead sampling.")
 
     parser.add_argument("--eval", action="store_true", help="Run evaluation.")
+    parser.add_argument("--kickstart", action="store_true", help="Kickstart sequences with real data.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose mode.")
 
     return parser
@@ -82,6 +83,31 @@ def main():
 
             plot_lines_iamondb_example(x, offsets_provided=True,
                                        mask=x_mask,
+                                       mean=X_mean, std=X_std, colored=True,
+                                       show=True)
+
+    if args.kickstart:
+        iamondb_valid = IAMOnDB(name='valid',
+                          prep='normalize',
+                          cond=False,
+                          path=data_path,
+                          X_mean=X_mean, X_std=X_std)
+
+
+        trng = RandomStreams(args.seed)
+        from lm_lstm_iamondb import build_sampler, gen_sample
+        from iamondb_utils import plot_lines_iamondb_example
+        f_next = build_sampler(tparams, model_options, trng)
+
+        dset_size = len(iamondb_valid.data[0])
+        for start in range(0, dset_size, 1):
+            end = start + 1
+            # x.shape : seq_len, batch_size, input_dim
+            x, x_mask = iamondb_valid.slices(start, end)
+            sample, sample_score = gen_sample(tparams, f_next, model_options, maxlen=args.seqlen, argmax=False, kickstart=x)
+            print("NLL: {}".format(sample_score))
+
+            plot_lines_iamondb_example(sample[0], offsets_provided=True,
                                        mean=X_mean, std=X_std, colored=True,
                                        show=True)
 
