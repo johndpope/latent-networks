@@ -17,7 +17,7 @@ def main(job_id, params):
         weight_aux=params['weight_aux'][0],
         batch_size=128,  # SRNN
         valid_batch_size=32,
-        dispFreq=10,
+        dispFreq=100,
         saveFreq=1000,
         sampleFreq=1000,
         dataset=None,

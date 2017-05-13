@@ -374,10 +374,16 @@ def latent_lstm_layer(
                 tparams[_p('trans_1', 'b')],
                 tparams[_p('z_mus', 'W')],
                 tparams[_p('z_mus', 'b')],
-                tparams[_p('inf', 'W')],
-                tparams[_p('inf', 'b')],
+                tparams[_p('inf1', 'W')],
+                tparams[_p('inf1', 'b')],
+                tparams[_p('inf2', 'W')],
+                tparams[_p('inf2', 'b')],
                 tparams[_p('inf_mus', 'W')],
                 tparams[_p('inf_mus', 'b')],
+                tparams[_p('gen1', 'W')],
+                tparams[_p('gen1', 'b')]
+                tparams[_p('gen2', 'W')],
+                tparams[_p('gen2', 'b')]
                 tparams[_p('gen_mus', 'W')],
                 tparams[_p('gen_mus', 'b')]]
 
@@ -393,8 +399,9 @@ def latent_lstm_layer(
     def _step(mask, sbelow, d_, g_s, sbefore, cell_before,
               U, b, W, W_cond, trans_1_w, trans_1_b,
               z_mus_w, z_mus_b,
-              inf_w, inf_b,
+              inf1_w, inf1_b, inf2_w, inf2_b,
               inf_mus_w, inf_mus_b,
+              gen1_w, gen1_b, gen2_w, gen2_b,
               gen_mus_w, gen_mus_b):
 
         p_z = lrelu(tensor.dot(sbefore, trans_1_w) + trans_1_b)
@@ -403,13 +410,16 @@ def latent_lstm_layer(
         z_mu, z_sigma = z_mus[:, :z_dim], z_mus[:, z_dim:]
 
         if d_ is not None:
-            encoder_hidden = lrelu(tensor.dot(concatenate([sbefore, d_], axis=1), inf_w) + inf_b)
-            encoder_mus = tensor.dot(encoder_hidden, inf_mus_w) + inf_mus_b
+            encoder1 = lrelu(tensor.dot(concatenate([sbefore, d_], axis=1), inf1_w) + inf1_b)
+            encoder2 = lrelu(tensor.dot(encoder1, inf2_w) + inf2_b)
+            encoder_mus = tensor.dot(encoder2, inf_mus_w) + inf_mus_b
             encoder_mu, encoder_sigma = encoder_mus[:, :z_dim], encoder_mus[:, z_dim:]
             tild_z_t = encoder_mu + g_s * tensor.exp(0.5 * encoder_sigma)
             kld = gaussian_kld(encoder_mu, encoder_sigma, z_mu, z_sigma)
             kld = tensor.sum(kld, axis=-1)
-            decoder_mus = tensor.dot(tild_z_t, gen_mus_w) + gen_mus_b
+            decoder1 = lrelu(tensor.dot(tild_z_t, gen1_w) + gen1_b)
+            decoder2 = lrelu(tensor.dot(decoder1, gen2_w) + gen2_b)
+            decoder_mus = tensor.dot(decoder2, gen_mus_w) + gen_mus_b
             decoder_mu, decoder_sigma = decoder_mus[:, :d_.shape[1]], decoder_mus[:, d_.shape[1]:]
             decoder_mu = tensor.tanh(decoder_mu)
             disc_d_ = theano.gradient.disconnected_grad(d_)
@@ -504,13 +514,18 @@ def init_params(options):
                                 nout=2 * options['dim_input'],
                                 ortho=False)
     #Prior Network params
-    params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_hidden'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='z_mus', nin=options['prior_hidden'], nout=2 * options['dim_z'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='trans_1', nin=options['dim'], nout=options['prior_dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='z_mus', nin=options['prior_dim'], nout=2 * options['dim_z'], ortho=False)
     #Inference network params
-    params = get_layer('ff')[0](options, params, prefix='inf', nin = 2 * options['dim'], nout=options['encoder_hidden'], ortho=False)
-    params = get_layer('ff')[0](options, params, prefix='inf_mus', nin = options['encoder_hidden'], nout=2 * options['dim_z'], ortho=False)
-    #Generative Network params
-    params = get_layer('ff')[0](options, params, prefix='gen_mus', nin = options['dim_z'], nout=2 * options['dim'], ortho=False)
+    # 2-layer MLP like in SRNN
+    params = get_layer('ff')[0](options, params, prefix='inf1', nin=2 * options['dim'], nout=options['encoder_dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='inf2', nin=options['encoder_dim'], nout=options['encoder_dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='inf_mus', nin=options['encoder_dim'], nout=2 * options['dim_z'], ortho=False)
+    # Generative Network params #
+    # 2-layer MLP like in SRNN
+    params = get_layer('ff')[0](options, params, prefix='gen1', nin = options['dim_z'], nout=options['decoder_dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='gen2', nin = options['decoder_dim'], nout=options['decoder_dim'], ortho=False)
+    params = get_layer('ff')[0](options, params, prefix='gen_mus', nin = options['decoder_dim'], nout=2 * options['dim'], ortho=False)
     return params
 
 
@@ -658,9 +673,10 @@ def train(dim_input=200,  # input vector dimensionality
 
     kl_rate = 0.0001  # SRNN paper
     batch_size = 128  # SRNN paper
-    prior_hidden = dim
+    prior_dim = 1024
     dim_z = 256  # SRNN
-    encoder_hidden = dim
+    encoder_dim = 1024
+    decoder_dim = 1024
     learn_h0 = False
 
     desc = saveto + 'seed_' + str(seed) + '_model_' + str(weight_aux) + '_weight_aux_' +  str(kl_start) + '_kl_Start_' + str(kl_rate) +  '_kl_rate_log.txt'
