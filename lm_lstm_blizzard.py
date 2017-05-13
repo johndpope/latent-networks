@@ -381,9 +381,9 @@ def latent_lstm_layer(
                 tparams[_p('inf_mus', 'W')],
                 tparams[_p('inf_mus', 'b')],
                 tparams[_p('gen1', 'W')],
-                tparams[_p('gen1', 'b')]
+                tparams[_p('gen1', 'b')],
                 tparams[_p('gen2', 'W')],
-                tparams[_p('gen2', 'b')]
+                tparams[_p('gen2', 'b')],
                 tparams[_p('gen_mus', 'W')],
                 tparams[_p('gen_mus', 'b')]]
 
